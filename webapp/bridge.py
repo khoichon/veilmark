@@ -145,6 +145,10 @@ def add_pattern_key(line: str, label: str) -> dict[str, Any]:
 
 
 def export_pattern_line() -> str:
+    """Your own pattern key as a shareable line. Without keys of your own every pattern
+    key here was shared by someone else, so there is nothing to export."""
+    if not status()["has_keys"]:
+        raise InputError("create or open your keys first")
     pk = _vm.keystore.pattern_key()
     return f"veilmark-pattern {pk.key} {pk.label}"
 

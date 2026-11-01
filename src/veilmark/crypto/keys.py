@@ -242,10 +242,14 @@ class KeyStore:
     def add_pattern_key(self, key: bytes, label: str) -> PatternKey:
         if len(key) != 32:
             raise KeyStoreError("pattern key must be 32 bytes")
-        pk = PatternKey(pattern_key_id(key), label, b64e(key), int(time.time()))
-        path = self._pdir() / f"{pk.key_id}.json"
+        kid = pattern_key_id(key)
+        path = self._pdir() / f"{kid}.json"
         if path.exists():
             raise KeyStoreError("pattern key already present")
+        # The oldest key is the default (own) one, so creation order must be strict even
+        # when several keys are added within the same second.
+        created = max([int(time.time())] + [k.created + 1 for k in self.pattern_keys()])
+        pk = PatternKey(kid, label, b64e(key), created)
         paths.atomic_write_json(path, asdict(pk), private=True)
         return pk
 

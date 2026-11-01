@@ -88,6 +88,38 @@ def test_shared_keys_between_people(bridge, synthetic_photo: np.ndarray) -> None
     assert rep["authentic"] and rep["verification"]["issuer_label"] == "Alice"
 
 
+def test_verify_without_own_keys(bridge, synthetic_photo: np.ndarray) -> None:
+    """A verifier needs only the issuer's pattern key and public key, no keys of their own."""
+    bridge.generate_keys("Alice")
+    alice = bridge.status()
+    pattern = bridge.export_pattern_line()
+    out = bridge.embed(_png(synthetic_photo), "a.png", "by alice", "balanced", "png", 92, True, False)[
+        "output"
+    ]
+    st = bridge.forget_keys()
+    assert not st["has_keys"] and not st["pattern_keys"]
+    with pytest.raises(ValueError, match="your keys first"):
+        bridge.export_pattern_line()  # nothing of your own to share
+    st = bridge.add_pattern_key(pattern, "")
+    assert not st["has_keys"] and len(st["pattern_keys"]) == 1
+    rep = bridge.detect(out, "a.png", False)
+    assert rep["payload"]["text"] == "by alice"  # text readable without the public key
+    assert rep["verification"]["signature"] == "unknown-key" and not rep["authentic"]
+    bridge.add_trusted(alice["public_line"], "")
+    rep = bridge.detect(out, "a.png", False)
+    assert rep["authentic"] and rep["verification"]["issuer_label"] == "Alice"
+
+
+def test_own_pattern_key_stays_default(bridge) -> None:
+    """Shared pattern keys added right after your own must not displace it."""
+    bridge.generate_keys("Alice")
+    alice_pattern = bridge.export_pattern_line()
+    bridge.generate_keys("Bob")
+    bob_pattern = bridge.export_pattern_line()
+    bridge.add_pattern_key(alice_pattern, "alice")  # same second as Bob's own key
+    assert bridge.export_pattern_line() == bob_pattern
+
+
 def test_bad_inputs(bridge) -> None:
     with pytest.raises(ValueError, match="keys first"):
         bridge.embed(b"x", "x.png", "", "balanced", "png", 92, True, False)

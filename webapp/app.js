@@ -14,6 +14,18 @@ const pending = new Map();
 // a worker restart after "Cancel".
 let session = null; // {text, pass}
 let unsaved = false;
+// Trust-list / shared-pattern-key changes made in this tab, replayed after a worker
+// restart or after creating/opening keys. Needed because a verifier may have no keys of
+// their own (so no session copy), and keyfiles hold only their owner's pattern key.
+let extras = []; // [{op, args}]
+
+async function replayExtras() {
+  let changed = 0;
+  for (const e of extras) {
+    try { await call(e.op, e.args); changed += 1; } catch (_) { /* already present / gone */ }
+  }
+  return changed;
+}
 
 function startWorker() {
   ready = false;
@@ -50,12 +62,10 @@ async function restartWorker() {
   pending.clear();
   startWorker();
   if (session) {
-    try {
-      render(await call("load_keyfile", { text: session.text, passphrase: session.pass }));
-    } catch (e) {
-      render(await call("status"));
-    }
+    try { await call("load_keyfile", { text: session.text, passphrase: session.pass }); } catch (_) { /* fall through */ }
   }
+  await replayExtras();
+  render(await call("status"));
 }
 
 function setBoot(f, msg) {
@@ -68,7 +78,7 @@ async function onReady(info) {
   $("engine").classList.add("done");
   $("boot-msg").textContent = "Engine ready · processing stays on this device";
   $("about").textContent = `Veilmark ${info.version} · Python runtime: Pyodide ${info.pyodide}`;
-  for (const id of ["btn-generate", "btn-open"]) $(id).disabled = false;
+  for (const id of ["btn-generate", "btn-open", "btn-trust-add", "btn-pattern-add"]) $(id).disabled = false;
   showRemembered();
   render(await call("status"));
 }
@@ -127,13 +137,15 @@ function render(st) {
   $("wm-go").disabled = !has || !wmFile;
   $("dt-go").disabled = !(st && st.pattern_keys && st.pattern_keys.length) || !dtFile;
   state = st;
+  if (!st) return;
+  const items = st.trusted.map((t) => `<li><span><b>${esc(t.label)}</b> <span class="mono small-text">${esc(t.key_id)}</span>${t.own ? " (you)" : ""}</span>${t.own ? "" : `<button class="link" data-remove="${esc(t.key_id)}">Remove</button>`}</li>`);
+  // With keys of your own, the first pattern key is yours; every other one was shared.
+  for (const p of st.pattern_keys.slice(has ? 1 : 0)) items.push(`<li><span>Pattern key <b>${esc(p.label)}</b> <span class="mono small-text">${esc(p.key_id)}</span></span></li>`);
+  $("trust-list").innerHTML = items.join("");
   if (!has) return;
   $("id-label").textContent = st.label;
   $("id-fp").textContent = st.fingerprint;
   $("unsaved").hidden = !unsaved;
-  const items = st.trusted.map((t) => `<li><span><b>${esc(t.label)}</b> <span class="mono small-text">${esc(t.key_id)}</span>${t.own ? " (you)" : ""}</span>${t.own ? "" : `<button class="link" data-remove="${esc(t.key_id)}">Remove</button>`}</li>`);
-  for (const p of st.pattern_keys.slice(1)) items.push(`<li><span>Pattern key <b>${esc(p.label)}</b> <span class="mono small-text">${esc(p.key_id)}</span></span></li>`);
-  $("trust-list").innerHTML = items.join("");
 }
 let state = null;
 
@@ -151,7 +163,9 @@ async function guarded(btn, fn) {
 $("btn-generate").onclick = () => guarded($("btn-generate"), async () => {
   const name = await askName();
   if (!name) return;
-  render(await call("generate_keys", { label: name }));
+  await call("generate_keys", { label: name });
+  await replayExtras();
+  render(await call("status"));
   unsaved = true;
   render(state);
   await refreshSession();
@@ -173,10 +187,11 @@ async function unlock(text, msg, offerRemember) {
     const r = await askPassphrase({ title: "Unlock keys", text: msg + " Unlocking takes a few seconds.", confirm: false, remember: offerRemember });
     if (!r) return;
     try {
-      render(await call("load_keyfile", { text, passphrase: r.pass }));
+      await call("load_keyfile", { text, passphrase: r.pass });
       session = { text, pass: r.pass };
       unsaved = false;
-      render(state);
+      if (await replayExtras()) { unsaved = true; await refreshSession(); }
+      render(await call("status"));
       if (r.remember) { try { localStorage.setItem(STORE_KEY, text); } catch (_) { /* storage unavailable */ } }
       showRemembered();
       return;
@@ -222,30 +237,43 @@ $("btn-copy-pub").onclick = async () => {
   setTimeout(() => ($("btn-copy-pub").textContent = "Copy public key"), 1500);
 };
 
+$("btn-copy-pattern").onclick = () => guarded($("btn-copy-pattern"), async () => {
+  if (!confirm("Your pattern key is a SECRET. Anyone who has it can find your watermarks and try to remove them. " +
+    "Share it only with people who should be able to verify your images.\n\nCopy it to the clipboard?")) return;
+  const line = await call("export_pattern_line");
+  try { await navigator.clipboard.writeText(line); $("btn-copy-pattern").textContent = "Copied"; }
+  catch (_) { prompt("Your pattern key (secret):", line); }
+  setTimeout(() => ($("btn-copy-pattern").textContent = "Copy pattern key…"), 1500);
+});
+
 $("btn-close-keys").onclick = async () => {
   if (unsaved && !confirm("These keys have not been saved. Close them anyway? They will be lost.")) return;
-  session = null; unsaved = false;
+  session = null; unsaved = false; extras = [];
   render(await call("forget_keys"));
 };
 
-$("btn-trust-add").onclick = () => guarded($("btn-trust-add"), async () => {
-  render(await call("add_trusted", { line: $("trust-line").value, label: "" }));
-  $("trust-line").value = "";
+// Trust-list changes: with keys of your own they belong in your keyfile (so mark the
+// keys unsaved and refresh the in-memory copy); without, they live only in this tab.
+async function changeTrust(op, args) {
+  render(await call(op, args));
+  extras.push({ op, args });
+  if (!state.has_keys) return;
   unsaved = true; render(state);
   await refreshSession();
+}
+
+$("btn-trust-add").onclick = () => guarded($("btn-trust-add"), async () => {
+  await changeTrust("add_trusted", { line: $("trust-line").value, label: "" });
+  $("trust-line").value = "";
 });
 $("btn-pattern-add").onclick = () => guarded($("btn-pattern-add"), async () => {
-  render(await call("add_pattern_key", { line: $("pattern-line").value, label: "" }));
+  await changeTrust("add_pattern_key", { line: $("pattern-line").value, label: "" });
   $("pattern-line").value = "";
-  unsaved = true; render(state);
-  await refreshSession();
 });
 $("trust-list").onclick = async (ev) => {
   const id = ev.target?.dataset?.remove;
   if (!id) return;
-  render(await call("remove_trusted", { key_id: id }));
-  unsaved = true; render(state);
-  await refreshSession();
+  try { await changeTrust("remove_trusted", { key_id: id }); } catch (e) { alert(e.message); }
 };
 
 window.addEventListener("beforeunload", (ev) => {

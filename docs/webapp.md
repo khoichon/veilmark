@@ -57,11 +57,18 @@ so a tampered header is rejected. Losing the passphrase means losing the keys.
 ## Sharing verification with others
 
 * Give people your **public key** (*Copy public key*); they add it under *Trusted
-  issuers*.
-* Detection also needs your **pattern key**, which is a secret: whoever has it can
+  issuers & shared pattern keys*.
+* Detection also needs your **pattern key** (*Copy pattern key…*, or
+  `veilmark keys pattern export` on the CLI), which is a secret: whoever has it can
   detect and attempt to remove your watermarks. Share it only with people who should
-  verify your images (`veilmark keys pattern export` on the CLI produces the
-  `veilmark-pattern …` line the web app accepts).
+  verify your images.
+* Verifiers do **not** need keys of their own: the *Trusted issuers & shared pattern
+  keys* section works before any keys are created or opened.
+* With only the pattern key, detection already shows the hidden text, but the signature
+  reads *unknown key*: anyone holding the pattern key could have written it. Only a
+  valid signature from a trusted issuer shows it came from you.
+* Shared pattern keys are not stored in keyfiles (a keyfile holds its owner's pattern
+  key and trusted issuers); add them again in a new tab.
 
 ## Limits and performance
 
