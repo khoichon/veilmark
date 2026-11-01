@@ -176,9 +176,11 @@ def test_static_build(tmp_path: Path) -> None:
     ):
         assert (out / name).is_file()
     # Asset references carry a build version so browsers never mix cached deploys.
-    assert re.search(r'src="app\.js\?v=[0-9a-f]{12}"', (out / "index.html").read_text())
-    assert re.search(r'new Worker\("worker\.js\?v=[0-9a-f]{12}"', (out / "app.js").read_text())
-    assert (out / "worker.js").read_text().count("?v=") == 2
+    assert re.search(r'src="app\.js\?v=[0-9a-f]{12}"', (out / "index.html").read_text(encoding="utf-8"))
+    assert re.search(
+        r'new Worker\("worker\.js\?v=[0-9a-f]{12}"', (out / "app.js").read_text(encoding="utf-8")
+    )
+    assert (out / "worker.js").read_text(encoding="utf-8").count("?v=") == 2
     names = zipfile.ZipFile(out / "veilmark.zip").namelist()
     assert "veilmark/api.py" in names and not any(
         n.startswith(("veilmark/app/", "veilmark/cli/")) for n in names
