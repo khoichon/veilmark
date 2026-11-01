@@ -154,3 +154,16 @@ def test_trust_rejects_bad_key(store) -> None:
     _, ts = store
     with pytest.raises(ValueError):
         ts.add(b"short", "x")
+
+
+def test_parse_key_line_keeps_full_label() -> None:
+    key = bytes(range(32))
+    b64 = keys.b64e(key)
+    p = keys.PUBLIC_KEY_PREFIX
+    assert keys.parse_key_line(f"{p} {b64} Studio North  Ltd\n", p) == (key, "Studio North Ltd")
+    assert keys.parse_key_line(f"\n  {p} {b64}\n", p) == (key, None)
+    assert keys.parse_key_line(b64, p) == (key, None)  # bare base64
+    assert keys.parse_key_line(f"{p} {b64} A\nsecond line ignored", p) == (key, "A")
+    for bad in ("", "   ", p, f"{p} not-base64!!", "not-base64!!"):
+        with pytest.raises(ValueError):
+            keys.parse_key_line(bad, p)

@@ -328,7 +328,7 @@ class Veilmark:
         if self_check:
             rep(0.94, "self-check: detecting the written file")
             check = self.detect_image(dst, pattern_key=spec.pattern_key)
-            ok = check.status == report_mod.STATUS_PAYLOAD and check.watermark_id == res.watermark_id
+            ok = check.payload_recovered_for(res.watermark_id)
             res.extra["self_check"] = {
                 "status": check.status,
                 "payload_recoverable": ok,

@@ -22,7 +22,6 @@ from PIL import Image
 from veilmark.api import Veilmark, WatermarkSpec, parse_strength
 from veilmark.core.tasks import CancelToken, Reporter
 from veilmark.crypto import keyfile, keys
-from veilmark.detection import report as report_mod
 from veilmark.image import io as image_io
 from veilmark.security.limits import InputError, Limits
 
@@ -64,7 +63,7 @@ def status() -> dict[str, Any]:
         "label": me.label if me else None,
         "key_id": me.key_id if me else None,
         "fingerprint": keys.format_fingerprint(me.public_bytes) if me else None,
-        "public_line": f"veilmark-ed25519 {me.public_key} {me.label}" if me else None,
+        "public_line": f"{keys.PUBLIC_KEY_PREFIX} {me.public_key} {me.label}" if me else None,
         "pattern_keys": [{"key_id": k.key_id, "label": k.label} for k in pks],
         # Trusted issuers' public keys alone can find their publicly verifiable watermarks.
         "can_detect": bool(_vm.detection_pattern_keys()),
@@ -113,15 +112,13 @@ def forget_keys() -> dict[str, Any]:
 
 
 def add_trusted(public_line: str, label: str) -> dict[str, Any]:
-    parts = (public_line or "").split()
-    if not parts:
+    if not (public_line or "").strip():
         raise InputError("paste the issuer's public key")
-    raw = parts[1] if parts[0] == "veilmark-ed25519" and len(parts) > 1 else parts[0]
-    name = (label or (parts[2] if len(parts) > 2 else "issuer")).strip()[:60]
     try:
-        pub = keys.b64d(raw)
+        pub, line_label = keys.parse_key_line(public_line, keys.PUBLIC_KEY_PREFIX)
     except ValueError as e:
         raise InputError("not a valid public key") from e
+    name = ((label or "").strip() or line_label or "issuer")[:60]
     _vm.trust.add(pub, name)
     return status()
 
@@ -134,15 +131,13 @@ def remove_trusted(key_id: str) -> dict[str, Any]:
 def add_pattern_key(line: str, label: str) -> dict[str, Any]:
     """Import someone's shared pattern key (``veilmark-pattern <b64> <label>``) to detect
     their watermarks. Pattern keys are secrets: only accept them from the issuer."""
-    parts = (line or "").split()
-    if not parts:
+    if not (line or "").strip():
         raise InputError("paste a pattern key")
-    raw = parts[1] if parts[0] == "veilmark-pattern" and len(parts) > 1 else parts[0]
     try:
-        key = keys.b64d(raw)
+        key, line_label = keys.parse_key_line(line, keys.PATTERN_KEY_PREFIX)
     except ValueError as e:
         raise InputError("not a valid pattern key") from e
-    _vm.keystore.add_pattern_key(key, (label or "shared").strip()[:60])
+    _vm.keystore.add_pattern_key(key, ((label or "").strip() or line_label or "shared")[:60])
     return status()
 
 
@@ -152,7 +147,8 @@ def export_pattern_line() -> str:
     if not status()["has_keys"]:
         raise InputError("create or open your keys first")
     pk = _vm.keystore.pattern_key()
-    return f"veilmark-pattern {pk.key} {pk.label}"
+    # Name the line after the identity (what the recipient needs), not the key's own label.
+    return f"{keys.PATTERN_KEY_PREFIX} {pk.key} {status()['label']}"
 
 
 # ------------------------------------------------------------------ media
@@ -220,7 +216,7 @@ def embed(
         res.notes.append("JPEG has no alpha channel; transparency was dropped")
     if self_check:
         check = _vm.detect_image_data(_load(blob, name), "self-check", reporter=rep.sub(0.58, 0.99))
-        ok = check.status == report_mod.STATUS_PAYLOAD and check.watermark_id == res.watermark_id
+        ok = check.payload_recovered_for(res.watermark_id)
         res.extra["self_check"] = {"status": check.status, "payload_recoverable": ok}
         if not ok:
             res.notes.append(

@@ -310,11 +310,14 @@ class KeysPage(QWidget):
         path, _ = QFileDialog.getOpenFileName(self, "Import pattern key")
         if not path:
             return
-        label, ok = QInputDialog.getText(self, "Import", "Label:")
+        try:
+            key, line_label = keys_mod.parse_key_line(Path(path).read_text(), keys_mod.PATTERN_KEY_PREFIX)
+        except ValueError as e:
+            QMessageBox.warning(self, "Import pattern key", f"Not a valid pattern key: {e}")
+            return
+        label, ok = QInputDialog.getText(self, "Import", "Label:", text=line_label or "")
         if ok:
-            parts = Path(path).read_text().split()
-            raw = parts[1] if parts and parts[0] == "veilmark-pattern" else parts[0]
-            self._try(lambda: self.vm.keystore.add_pattern_key(keys_mod.b64d(raw), label or "imported"))
+            self._try(lambda: self.vm.keystore.add_pattern_key(key, label.strip() or "imported"))
 
     def add_issuer(self) -> None:
         text, ok = QInputDialog.getMultiLineText(
@@ -325,16 +328,16 @@ class KeysPage(QWidget):
         )
         if not ok or not text.strip():
             return
-        parts = text.split()
-        raw = parts[1] if parts[0] == "veilmark-ed25519" else parts[0]
-        label, ok = QInputDialog.getText(
-            self, "Trust issuer", "Label:", text=parts[2] if len(parts) > 2 else ""
-        )
+        try:
+            pub, line_label = keys_mod.parse_key_line(text, keys_mod.PUBLIC_KEY_PREFIX)
+        except ValueError as e:
+            QMessageBox.warning(self, "Trust issuer", f"Not a valid public key: {e}")
+            return
+        label, ok = QInputDialog.getText(self, "Trust issuer", "Label:", text=line_label or "")
         if not ok:
             return
 
         def do() -> None:
-            pub = keys_mod.b64d(raw)
             fp = keys_mod.format_fingerprint(pub)
             if (
                 QMessageBox.question(self, "Confirm fingerprint", f"Trust key with fingerprint\n{fp}?")

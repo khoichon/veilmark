@@ -67,6 +67,17 @@ class DetectionReport:
     def detected(self) -> bool:
         return self.status in (STATUS_PAYLOAD, STATUS_ID, STATUS_SIGNAL)
 
+    def payload_recovered_for(self, watermark_id: str) -> bool:
+        """Whether the payload of the watermark with this id was recovered, whether it is
+        the strongest watermark found or one of the additional ones (media watermarked
+        more than once; the older mark can outrank the newer one)."""
+        if self.status == STATUS_PAYLOAD and self.watermark_id == watermark_id:
+            return True
+        return any(
+            a.get("status") == STATUS_PAYLOAD and a.get("watermark_id") == watermark_id
+            for a in self.additional
+        )
+
     @property
     def authentic(self) -> bool:
         return bool(self.verification and self.verification.get("authentic"))

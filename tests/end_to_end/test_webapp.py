@@ -128,6 +128,16 @@ def test_public_watermark_in_browser_bridge(bridge, synthetic_photo: np.ndarray)
     assert rep["diagnostics"]["publicly_verifiable"]
 
 
+def test_shared_key_names_keep_spaces(bridge) -> None:
+    alice = bridge.generate_keys("Studio North Ltd")
+    pattern = bridge.export_pattern_line()
+    bridge.forget_keys()
+    st = bridge.add_trusted(alice["public_line"], "")
+    assert [t["label"] for t in st["trusted"]] == ["Studio North Ltd"]
+    st = bridge.add_pattern_key(pattern, "")
+    assert [k["label"] for k in st["pattern_keys"]] == ["Studio North Ltd"]
+
+
 def test_own_pattern_key_stays_default(bridge) -> None:
     """Shared pattern keys added right after your own must not displace it."""
     bridge.generate_keys("Alice")

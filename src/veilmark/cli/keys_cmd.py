@@ -265,19 +265,15 @@ def cmd_pattern_export(vm: Veilmark, args: argparse.Namespace) -> int:
 
 
 def cmd_pattern_import(vm: Veilmark, args: argparse.Namespace) -> int:
-    parts = args.file.read_text().split()
-    raw = parts[1] if parts and parts[0] == "veilmark-pattern" else parts[0]
-    pk = vm.keystore.add_pattern_key(keys_mod.b64d(raw), args.label)
+    key, _ = keys_mod.parse_key_line(args.file.read_text(), keys_mod.PATTERN_KEY_PREFIX)
+    pk = vm.keystore.add_pattern_key(key, args.label)
     common.emit({"key_id": pk.key_id}, args.json, f"imported pattern key {pk.key_id}")
     return 0
 
 
 def _read_pub(s: str) -> bytes:
     p = Path(s)
-    if p.exists():
-        parts = p.read_text().split()
-        s = parts[1] if parts and parts[0] == "veilmark-ed25519" else parts[0]
-    return keys_mod.b64d(s)
+    return keys_mod.parse_key_line(p.read_text() if p.exists() else s, keys_mod.PUBLIC_KEY_PREFIX)[0]
 
 
 def cmd_trust_add(vm: Veilmark, args: argparse.Namespace) -> int:

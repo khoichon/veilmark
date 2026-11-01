@@ -43,6 +43,30 @@ def b64d(s: str) -> bytes:
     return base64.b64decode(s.encode("ascii"), validate=True)
 
 
+PUBLIC_KEY_PREFIX = "veilmark-ed25519"
+PATTERN_KEY_PREFIX = "veilmark-pattern"
+
+
+def parse_key_line(text: str, prefix: str) -> tuple[bytes, str | None]:
+    """Parse a shared key line ``<prefix> <base64> <label>`` or a bare base64 key.
+
+    The label is everything after the key, so names with spaces survive (runs of
+    whitespace are collapsed). Only the first non-empty line is read. Raises
+    ``ValueError`` for empty input or invalid base64.
+    """
+    lines = [ln.strip() for ln in (text or "").splitlines() if ln.strip()]
+    if not lines:
+        raise ValueError("no key given")
+    parts = lines[0].split(maxsplit=2)
+    if parts[0] == prefix:
+        if len(parts) < 2:
+            raise ValueError(f"no key after {prefix!r}")
+        raw, label = parts[1], (" ".join(parts[2].split()) if len(parts) > 2 else None)
+    else:
+        raw, label = parts[0], None
+    return b64d(raw), label or None
+
+
 def fingerprint(public_key: bytes) -> bytes:
     """32-byte fingerprint; the first 4 bytes are the in-band key id hint."""
     return hashlib.sha256(FINGERPRINT_DOMAIN + public_key).digest()
