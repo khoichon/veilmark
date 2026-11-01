@@ -40,6 +40,12 @@ def register(sub: argparse._SubParsersAction) -> None:
             help="add a watermark even if the input already carries one (it gets a different tile "
             "period so both stay detectable); by default such inputs are refused",
         )
+        p.add_argument(
+            "--public",
+            action="store_true",
+            help="publicly verifiable: anyone with your public key can find and verify the "
+            "watermark (and also try to remove it); no pattern key needs to be shared",
+        )
         p.add_argument("--passphrase-env", help="env var holding the key passphrase")
 
     p = ws.add_parser("image", help="watermark one or more images")
@@ -121,6 +127,7 @@ def _spec(args: argparse.Namespace) -> WatermarkSpec:
         chip_px=args.chip_size,
         quality=getattr(args, "quality", 95),
         allow_rewatermark=args.allow_rewatermark,
+        public=args.public,
     )
 
 

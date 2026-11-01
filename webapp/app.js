@@ -27,16 +27,36 @@ async function replayExtras() {
   return changed;
 }
 
-function startWorker() {
+// The page is covered (and inert) whenever the engine is not ready: nothing works before.
+let restoring = false; // keys are being restored after a restart: stay covered until done
+function lockPage(title, restart = false) {
+  $("boot-screen").hidden = false;
+  $("boot-screen").classList.toggle("restart", restart);
+  $("boot-title").textContent = title;
+  $("boot-reload").hidden = true;
+  for (const el of document.querySelectorAll("body > header, body > main, body > footer")) el.inert = true;
+}
+function unlockPage() {
+  $("boot-screen").hidden = true;
+  for (const el of document.querySelectorAll("body > header, body > main, body > footer")) el.inert = false;
+}
+function bootFailed(msg) {
+  lockPage("Veilmark could not start");
+  setBoot(0, msg);
+  $("boot-reload").hidden = false;
+}
+$("boot-reload").onclick = () => location.reload();
+
+function startWorker(restart = false) {
   ready = false;
+  lockPage(restart ? "Restarting the engine" : "Loading the engine", restart);
   setBoot(0, "Starting…");
-  $("engine").classList.remove("done");
   worker = new Worker("worker.js", { type: "module" });
   worker.onmessage = (ev) => {
     const m = ev.data;
     if (m.type === "boot") setBoot(m.f, m.msg);
     else if (m.type === "ready") onReady(m.info);
-    else if (m.type === "fatal") setBoot(0, "Could not start: " + m.message);
+    else if (m.type === "fatal") bootFailed("Could not start: " + m.message);
     else if (m.type === "progress") pending.get(m.id)?.onProgress?.(m.f, m.msg);
     else if (m.type === "result" || m.type === "error") {
       const p = pending.get(m.id);
@@ -45,7 +65,7 @@ function startWorker() {
       m.type === "result" ? p.resolve(m.value) : p.reject(new Error(m.message));
     }
   };
-  worker.onerror = (e) => setBoot(0, "Engine error: " + (e.message || "failed to load"));
+  worker.onerror = (e) => bootFailed("Engine error: " + (e.message || "failed to load"));
 }
 
 function call(op, args = {}, onProgress = null, transfer = []) {
@@ -60,27 +80,34 @@ async function restartWorker() {
   worker.terminate();
   for (const p of pending.values()) p.reject(new Error("cancelled"));
   pending.clear();
-  startWorker();
-  if (session) {
-    try { await call("load_keyfile", { text: session.text, passphrase: session.pass }); } catch (_) { /* fall through */ }
+  restoring = true;
+  startWorker(true);
+  try {
+    if (session) {
+      try { await call("load_keyfile", { text: session.text, passphrase: session.pass }); } catch (_) { /* fall through */ }
+    }
+    await replayExtras();
+    render(await call("status"));
+  } finally {
+    restoring = false;
+    if (ready) unlockPage();
   }
-  await replayExtras();
-  render(await call("status"));
 }
 
 function setBoot(f, msg) {
   $("boot-fill").style.width = `${Math.round(f * 100)}%`;
+  $("boot-pct").textContent = f > 0 ? `${Math.round(f * 100)}%` : "";
   $("boot-msg").textContent = msg;
 }
 
 async function onReady(info) {
   ready = true;
-  $("engine").classList.add("done");
-  $("boot-msg").textContent = "Engine ready · processing stays on this device";
+  $("engine-msg").textContent = "Engine ready · processing stays on this device";
   $("about").textContent = `Veilmark ${info.version} · Python runtime: Pyodide ${info.pyodide}`;
   for (const id of ["btn-generate", "btn-open"]) $(id).disabled = false;
   showRemembered();
   render(await call("status"));
+  if (!restoring) unlockPage();
 }
 
 // --------------------------------------------------------------- dialogs
@@ -135,7 +162,9 @@ function render(st) {
   $("keys-empty").hidden = has;
   $("keys-loaded").hidden = !has;
   $("wm-go").disabled = !has || !wmFile;
-  $("dt-go").disabled = !(st && st.pattern_keys && st.pattern_keys.length) || !dtFile;
+  const canDetect = !!(st && st.can_detect);
+  $("dt-go").disabled = !canDetect || !dtFile;
+  $("dt-hint").hidden = canDetect;
   state = st;
   if (!st) return;
   const items = st.trusted.map((t) => `<li><span><b>${esc(t.label)}</b> <span class="mono small-text">${esc(t.key_id)}</span>${t.own ? " (you)" : ""}</span>${t.own ? "" : `<button class="link" data-remove="${esc(t.key_id)}">Remove</button>`}</li>`);
@@ -320,6 +349,8 @@ function job(prefix) {
   };
 }
 
+$("wm-public").onchange = () => { $("wm-public-note").hidden = !$("wm-public").checked; };
+
 $("wm-cancel").onclick = $("dt-cancel").onclick = () => restartWorker();
 
 $("wm-go").onclick = async () => {
@@ -332,7 +363,7 @@ $("wm-go").onclick = async () => {
     const r = await call("embed", {
       data, name: wmFile.name, text: $("wm-text").value, strength: $("wm-strength").value,
       format: fmt, quality: 92, sign: true, self_check: $("wm-selfcheck").checked,
-      allow_rewatermark: $("wm-rewm").checked,
+      allow_rewatermark: $("wm-rewm").checked, public: $("wm-public").checked,
     }, j.progress, [data]);
     const res = r.result;
     const blob = new Blob([r.output], { type: res.mime });
@@ -398,6 +429,12 @@ $("dt-go").onclick = async () => {
         <div>${a.payload && a.payload.text != null ? `<b>${esc(a.payload.text)}</b>` : esc(a.status)}</div>
         <div class="small-text">Signature ${esc(av.signature || "n/a")} · ${esc(av.issuer_label || "unknown issuer")} · ${esc(av.trust || "")} · id ${esc(a.watermark_id || "?")}</div></div>`;
     }
+    if (r.diagnostics && r.diagnostics.publicly_verifiable) {
+      h += `<p class="small-text">Publicly verifiable watermark: found using the issuer's public key alone.</p>`;
+    }
+    if (r.status === "not-detected") {
+      h += `<p class="small-text">If the issuer made a private (not publicly verifiable) watermark, you also need their pattern key.</p>`;
+    }
     h += `<p class="small-text">Evidence: sync z = ${esc(r.confidence.sync_z)} (threshold ${esc(r.confidence.sync_present_threshold)})</p>`;
     for (const n of r.notes || []) h += `<p class="small-text">${esc(n)}</p>`;
     out.innerHTML = h;
@@ -409,7 +446,7 @@ $("dt-go").onclick = async () => {
 };
 
 if (!("Worker" in window) || !("WebAssembly" in window)) {
-  setBoot(0, "This browser cannot run Veilmark (needs Web Workers and WebAssembly).");
+  bootFailed("This browser cannot run Veilmark (needs Web Workers and WebAssembly).");
 } else {
   startWorker();
 }

@@ -406,6 +406,10 @@ def detect_video(
         }
     )
     r.diagnostics.update(diag)
+    # Only meaningful for a detected watermark, not a below-threshold candidate.
+    r.diagnostics["publicly_verifiable"] = r.detected and kids[geo.key_index] in {
+        k.key_id for k in vm.public_pattern_keys()
+    }
     r.diagnostics["timeline_sample"] = timeline[:: max(1, len(timeline) // 40)]
     if nf * stride < total * 0.5 and stride > 1:
         r.notes.append(f"analysed every {stride}th frame (max_frames={max_frames})")

@@ -69,6 +69,13 @@ class WatermarkPage(QWidget):
         self.out_fmt = QComboBox()
         self.out_fmt.addItems(["same as input", "png", "jpg", "webp"])
         self.overwrite = QCheckBox("Allow replacing existing output files")
+        self.public = QCheckBox("Publicly verifiable (anyone with your public key can verify)")
+        self.public.setToolTip(
+            "Uses a pattern derived from your public key instead of your secret pattern key, so "
+            "verifiers need only your public key. Anyone who has it can also find the watermark and "
+            "try to remove it. Requires a signing identity."
+        )
+        self.public.toggled.connect(lambda on: self.pattern.setEnabled(not on))
         self.rewatermark = QCheckBox("Allow adding a watermark to media that already has one")
         self.rewatermark.setToolTip(
             "Normally refused: a second watermark on the same tile period damages both. When allowed, "
@@ -81,6 +88,7 @@ class WatermarkPage(QWidget):
         form.addRow("Metadata (hex)", self.meta)
         form.addRow("Signing identity", self.identity)
         form.addRow("Pattern key", self.pattern)
+        form.addRow("", self.public)
         form.addRow("", self.timestamp)
         form.addRow("Strength", self.strength)
         form.addRow("JPEG/WebP quality", self.quality)
@@ -213,6 +221,10 @@ class WatermarkPage(QWidget):
             QMessageBox.information(self, "Watermark", "Create a pattern key first (Keys & trust tab).")
             return None
         kid = self.identity.currentData()
+        public = self.public.isChecked()
+        if public and kid is None:
+            QMessageBox.information(self, "Watermark", "A publicly verifiable watermark must be signed.")
+            return None
         pw = None
         if kid is not None:
             ident = self.vm.keystore.identity(kid)
@@ -234,7 +246,8 @@ class WatermarkPage(QWidget):
             sign=kid is not None,
             identity=kid,
             passphrase=pw,
-            pattern_key=self.pattern.currentData(),
+            pattern_key=None if public else self.pattern.currentData(),
+            public=public,
             strength=self.strength.value(),
             quality=self.quality.value(),
             allow_rewatermark=self.rewatermark.isChecked(),

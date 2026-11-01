@@ -8,18 +8,28 @@
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
-<header class="top">
+<!-- Covers the page until the engine is ready: nothing on the page works before that. -->
+<div class="boot-screen" id="boot-screen" role="status" aria-live="polite">
+  <div class="boot-card">
+    <h1>Veilmark <span class="tag">web</span></h1>
+    <p id="boot-title">Loading the engine</p>
+    <div class="bar"><div class="fill" id="boot-fill"></div></div>
+    <div class="job-row"><span id="boot-msg">Starting…</span><span class="elapsed" id="boot-pct"></span></div>
+    <p class="small-text" id="boot-note">The first visit downloads about 30 MB (Python and image libraries); later visits load from
+      the browser cache. Your images and keys never leave this device.</p>
+    <noscript><p class="err">Veilmark needs JavaScript.</p></noscript>
+    <button class="primary" id="boot-reload" hidden>Reload the page</button>
+  </div>
+</div>
+<header class="top" inert>
   <div>
     <h1>Veilmark <span class="tag">web</span></h1>
     <p class="sub">Invisible, signed image watermarks. Everything runs in this browser tab: your images and keys never leave your computer.</p>
   </div>
-  <div class="engine" id="engine" aria-live="polite">
-    <div class="bar small"><div class="fill" id="boot-fill"></div></div>
-    <span id="boot-msg">Starting…</span>
-  </div>
+  <div class="engine" id="engine-msg"></div>
 </header>
 
-<main>
+<main inert>
   <!-- ============================== KEYS ============================== -->
   <section class="card" id="keys-card" aria-labelledby="keys-h">
     <h2 id="keys-h"><span class="step">1</span> Your keys</h2>
@@ -99,6 +109,9 @@
       </div>
     </div>
     <label class="check"><input type="checkbox" id="wm-selfcheck" checked> Check the result can be read back (slower, recommended)</label>
+    <label class="check"><input type="checkbox" id="wm-public"> Publicly verifiable: anyone with my public key can verify it</label>
+    <p class="warn" id="wm-public-note" hidden>Verifiers won't need your secret pattern key, only your public key. Anyone who has your
+      public key can also find this watermark and try to remove it.</p>
     <label class="check" id="wm-rewm-row" hidden><input type="checkbox" id="wm-rewm"> Add my watermark anyway (both stay detectable)</label>
     <button class="primary wide" id="wm-go" disabled>Watermark</button>
     <div class="job" id="wm-job" hidden>
@@ -118,6 +131,8 @@
     <input type="file" id="dt-file" accept="image/*" hidden>
     <label class="check"><input type="checkbox" id="dt-thorough" checked> Thorough search if nothing is found at first (slower)</label>
     <button class="primary wide" id="dt-go" disabled>Detect</button>
+    <p class="small-text" id="dt-hint" hidden>To detect, add the issuer's <b>public key</b> under <i>Trusted issuers &amp; shared pattern
+      keys</i> (enough for publicly verifiable watermarks) or their <b>pattern key</b>, or load your own keys.</p>
     <div class="job" id="dt-job" hidden>
       <div class="bar"><div class="fill" id="dt-fill"></div></div>
       <div class="job-row"><span id="dt-msg">Working…</span><span class="elapsed" id="dt-time"></span><button class="link" id="dt-cancel">Cancel</button></div>
@@ -126,7 +141,7 @@
   </section>
 </main>
 
-<footer>
+<footer inert>
   <p>A valid signature shows only that the hidden text was signed by the listed key. It does not prove an image is
     unedited, who made it, or that its content is true. Watermarks can be weakened or removed, and absence of a
     watermark proves nothing. Not a substitute for backups, access control, copyright registration or legal evidence.</p>

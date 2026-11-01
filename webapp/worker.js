@@ -89,7 +89,7 @@ const OPS = {
   export_pattern_line: () => bridge.export_pattern_line(),
   embed: (a, progress) =>
     bridge.embed(
-      new Uint8Array(a.data), a.name, a.text, a.strength, a.format, a.quality, a.sign, a.self_check, progress, !!a.allow_rewatermark,
+      new Uint8Array(a.data), a.name, a.text, a.strength, a.format, a.quality, a.sign, a.self_check, progress, !!a.allow_rewatermark, !!a.public,
     ),
   detect: (a, progress) => bridge.detect(new Uint8Array(a.data), a.name, a.thorough, progress),
 };

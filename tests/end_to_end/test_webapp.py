@@ -111,6 +111,23 @@ def test_verify_without_own_keys(bridge, synthetic_photo: np.ndarray) -> None:
     assert rep["authentic"] and rep["verification"]["issuer_label"] == "Alice"
 
 
+def test_public_watermark_in_browser_bridge(bridge, synthetic_photo: np.ndarray) -> None:
+    """Public watermark: a verifier with only the issuer's public key can detect and verify."""
+    alice = bridge.generate_keys("Alice")
+    out = bridge.embed(
+        _png(synthetic_photo), "a.png", "public", "balanced", "png", 92, True, False, None, False, True
+    )["output"]
+    st = bridge.forget_keys()
+    assert not st["can_detect"]
+    with pytest.raises(ValueError, match="public key"):
+        bridge.detect(out, "a.png", False)
+    st = bridge.add_trusted(alice["public_line"], "")
+    assert st["can_detect"] and not st["has_keys"]
+    rep = bridge.detect(out, "a.png", False)
+    assert rep["authentic"] and rep["payload"]["text"] == "public"
+    assert rep["diagnostics"]["publicly_verifiable"]
+
+
 def test_own_pattern_key_stays_default(bridge) -> None:
     """Shared pattern keys added right after your own must not displace it."""
     bridge.generate_keys("Alice")

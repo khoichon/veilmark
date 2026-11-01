@@ -54,6 +54,7 @@ class WatermarkSpec:
     identity: str | None = None  # key id prefix or label; None = newest active
     passphrase: str | None = None
     pattern_key: str | None = None  # key id prefix or label; None = first key
+    public: bool = False  # publicly verifiable: pattern derived from the signing public key
     strength: float = 1.0
     chip_px: int | None = None
     quality: int = 95  # lossy output quality (JPEG/WebP)
@@ -135,11 +136,46 @@ class Veilmark:
         return self.plugins.load_enabled()
 
     # ------------------------------------------------------------------ keys
+    def public_pattern_keys(self) -> list[keys_mod.PatternKey]:
+        """Pattern keys of publicly verifiable watermarks: derived from the public key of
+        every identity of your own and every issuer in the trust list."""
+        out: dict[str, keys_mod.PatternKey] = {}
+        sources = [(i.public_bytes, i.label) for i in self.keystore.identities()]
+        sources += [(t.public_bytes, t.label) for t in self.trust.issuers()]
+        for pub, label in sources:
+            key = keys_mod.public_pattern_key(pub)
+            kid = keys_mod.pattern_key_id(key)
+            out.setdefault(kid, keys_mod.PatternKey(kid, f"public: {label}", keys_mod.b64e(key), 0))
+        return list(out.values())
+
+    def detection_pattern_keys(self) -> list[keys_mod.PatternKey]:
+        """Every pattern key detection tries: stored (secret) keys, then public ones."""
+        stored = self.keystore.pattern_keys()
+        seen = {k.key_id for k in stored}
+        return stored + [k for k in self.public_pattern_keys() if k.key_id not in seen]
+
+    def embedding_pattern_key(self, spec: WatermarkSpec) -> keys_mod.PatternKey:
+        """The pattern key a new watermark uses: a stored secret key, or for a public
+        watermark the key derived from the signing identity's public key."""
+        if not spec.public:
+            return self.keystore.pattern_key(spec.pattern_key)
+        if not spec.sign:
+            raise InputError("a publicly verifiable watermark must be signed")
+        if spec.pattern_key is not None:
+            raise InputError("a publicly verifiable watermark cannot use a chosen pattern key")
+        ident = self.keystore.identity(spec.identity)
+        key = keys_mod.public_pattern_key(ident.public_bytes)
+        kid = keys_mod.pattern_key_id(key)
+        return keys_mod.PatternKey(kid, f"public: {ident.label}", keys_mod.b64e(key), 0)
+
     def keyring(self, ref: str | None = None) -> tuple[list[KeyedPatterns], list[str]]:
         """Pattern keys to try during detection (one, or all known keys)."""
-        pk = [self.keystore.pattern_key(ref)] if ref is not None else self.keystore.pattern_keys()
+        pk = [self.keystore.pattern_key(ref)] if ref is not None else self.detection_pattern_keys()
         if not pk:
-            raise keys_mod.KeyStoreError("no pattern key available; run `veilmark keys init` or import one")
+            raise keys_mod.KeyStoreError(
+                "no pattern key available; run `veilmark keys init`, import a pattern key, "
+                "or trust an issuer who makes publicly verifiable watermarks"
+            )
         return [KeyedPatterns(k.key_bytes) for k in pk], [k.key_id for k in pk]
 
     def own_public_keys(self) -> list[tuple[bytes, str]]:
@@ -200,7 +236,7 @@ class Veilmark:
         rep(0.05, "preparing payload")
         wid = spec.watermark_id or os.urandom(8)
         raw, signer = self.build_payload(spec, wid)
-        pk = self.keystore.pattern_key(spec.pattern_key)
+        pk = self.embedding_pattern_key(spec)
         pats = KeyedPatterns(pk.key_bytes)
         if min(img.height, img.width) < 128:
             raise InputError("image too small to watermark (minimum 128 px on the short side)")
@@ -314,7 +350,7 @@ class Veilmark:
         Uses the fast detector; a watermark made with someone else's pattern key cannot
         be seen and is therefore not reported here.
         """
-        pks = self.keystore.pattern_keys()
+        pks = self.detection_pattern_keys()
         if not pks:
             return []
         keyring = [KeyedPatterns(k.key_bytes) for k in pks]
@@ -398,6 +434,10 @@ class Veilmark:
             r.geometry = det.best.lattice.describe()
             if det.best.hit is not None:
                 r.diagnostics["pattern_key_id"] = kids[det.best.hit.key_index]
+                # Only meaningful for a detected watermark, not a below-threshold candidate.
+                r.diagnostics["publicly_verifiable"] = r.detected and kids[det.best.hit.key_index] in {
+                    k.key_id for k in self.public_pattern_keys()
+                }
         r.diagnostics["image_size"] = [img.width, img.height]
         r.diagnostics["seconds"] = round(time.perf_counter() - t0, 3)
         r.notes = list(img.notes) + r.notes
@@ -407,7 +447,7 @@ class Veilmark:
     def _detect_plugin_backend(
         self, img: image_io.ImageData, source: str, backend: str, pattern_key: str | None, t0: float
     ) -> report_mod.DetectionReport:
-        pks = [self.keystore.pattern_key(pattern_key)] if pattern_key else self.keystore.pattern_keys()
+        pks = [self.keystore.pattern_key(pattern_key)] if pattern_key else self.detection_pattern_keys()
         res = backends.get(backend).detect_luma(img.luma(), [k.key_bytes for k in pks])
         core = framing.CoreResult(res.watermark_id is not None, res.watermark_id, None, 1.0)
         full = framing.FullResult(res.payload is not None, res.payload, 1.0) if res.payload else None

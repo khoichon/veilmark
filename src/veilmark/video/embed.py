@@ -84,7 +84,7 @@ def embed_video(
             )
     wid = spec.watermark_id or os.urandom(8)
     raw, signer = vm.build_payload(spec, wid)
-    pk = vm.keystore.pattern_key(spec.pattern_key)
+    pk = vm.embedding_pattern_key(spec)
     pats = KeyedPatterns(pk.key_bytes)
     strength = spec.strength * (LIGHT_STRENGTH_FACTOR if mode == "light" else 1.0)
     plan = engine.make_plan(

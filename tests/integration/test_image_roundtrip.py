@@ -224,3 +224,42 @@ def test_independent_marks_on_same_period_collide(
     r = vm.detect_image_data(ImageData(second.rgb))
     assert r.status != rep_mod.STATUS_PAYLOAD or (r.payload or {}).get("text") == "first"
     assert r.watermark_id in (None, wid1)
+
+
+def test_public_watermark_verifies_with_public_key_only(
+    vm: Veilmark, photo: np.ndarray, tmp_path: Path
+) -> None:
+    """A publicly verifiable watermark needs only the issuer's public key to verify."""
+    spec = WatermarkSpec(text="public mark", watermark_id=FIXED_ID, include_timestamp=False, public=True)
+    out, res = vm.embed_image_data(ImageData(photo), spec)
+    assert res.pattern_key_id not in {k.key_id for k in vm.keystore.pattern_keys()}  # not the secret key
+    own = _detect(vm, out.rgb)  # the issuer finds it through their own identity
+    assert own.authentic and own.diagnostics["publicly_verifiable"]
+
+    verifier = Veilmark(tmp_path / "verifier")  # no keys of their own at all
+    assert verifier.detection_pattern_keys() == []
+    issuer_pub = vm.keystore.identity().public_bytes
+    verifier.trust.add(issuer_pub, "tester")
+    r = verifier.detect_image_data(ImageData(out.rgb))
+    assert r.status == rep_mod.STATUS_PAYLOAD and r.payload is not None
+    assert r.payload["text"] == "public mark" and r.authentic
+    assert r.diagnostics["publicly_verifiable"]
+    assert "pattern      : public" in r.summary()
+
+
+def test_private_watermark_needs_pattern_key(vm: Veilmark, photo: np.ndarray, tmp_path: Path) -> None:
+    """The public key alone does not reveal an ordinary (private) watermark."""
+    out, _ = _embed(vm, photo, "private mark")
+    verifier = Veilmark(tmp_path / "verifier")
+    verifier.trust.add(vm.keystore.identity().public_bytes, "tester")
+    r = verifier.detect_image_data(ImageData(out.rgb))
+    assert r.status == rep_mod.STATUS_NONE
+    assert not r.diagnostics.get("publicly_verifiable")
+    assert not _detect(vm, out.rgb).diagnostics["publicly_verifiable"]
+
+
+def test_public_watermark_must_be_signed(vm: Veilmark, photo: np.ndarray) -> None:
+    with pytest.raises(ValueError, match="must be signed"):
+        vm.embed_image_data(ImageData(photo), WatermarkSpec(text="x", sign=False, public=True))
+    with pytest.raises(ValueError, match="chosen pattern key"):
+        vm.embed_image_data(ImageData(photo), WatermarkSpec(text="x", public=True, pattern_key="test"))

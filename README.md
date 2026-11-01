@@ -56,6 +56,7 @@ veilmark keys init --label "Studio North"         # pattern key + passphrase-enc
 veilmark watermark image photo.jpg -o photo.wm.jpg --text "© Studio North 2026"
 #   --strength subtle | balanced (default) | robust   trades visibility for robustness
 veilmark verify photo.wm.jpg                       # exit 0 = authentic payload from a trusted issuer
+#   --public  makes a watermark verifiable with your public key alone (anyone can then find it)
 veilmark watermark video clip.mp4 -o clip.wm.mp4 --text "© Studio North 2026"
 veilmark detect clip.wm.mp4 --json
 ```

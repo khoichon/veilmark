@@ -90,6 +90,8 @@ class DetectionReport:
                 + (f" ({v['issuer_label']}, {v['issuer_key_id']})" if v.get("issuer_key_id") else "")
             )
             lines.append(f"  verdict      : {v['message']}")
+        if self.diagnostics.get("publicly_verifiable"):
+            lines.append("  pattern      : public (anyone with the issuer's public key can find it)")
         c = self.confidence
         if c:
             lines.append(

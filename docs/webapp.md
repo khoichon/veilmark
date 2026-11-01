@@ -32,8 +32,14 @@ downloaded wheel against the SHA-256 in Pyodide's lock file.
    strength and output format. A read-back check (on by default) decodes the written
    file before offering it for download. Press and hold the result to compare with the
    original; click to view at 100%.
-3. **Detect & verify**: drop any copy. Detection, signature and issuer trust are shown
+3. **Detect & verify**: drop any copy. Detect is available once any pattern key is
+   loaded or any issuer is trusted (for publicly verifiable watermarks); otherwise a hint
+   says what to add. Detection, signature and issuer trust are shown
    as three separate results.
+
+Until the engine has loaded (and while it restarts after *Cancel*) a full-screen panel
+covers the page, with download progress; nothing on the page can be used before that.
+If the engine cannot start, the panel says why and offers a reload.
 
 Every long step shows a progress bar with moving stripes, a status line and elapsed
 seconds, plus **Cancel** (which restarts the engine; loaded keys are restored from an
@@ -55,6 +61,17 @@ seconds in WebAssembly). On import the header is compared with the decrypted sec
 so a tampered header is rejected. Losing the passphrase means losing the keys.
 
 ## Sharing verification with others
+
+There are two kinds of watermark:
+
+* **Publicly verifiable** (tick *Publicly verifiable* when watermarking, or `--public`
+  on the CLI): the pattern is derived from your public key, so verifiers need only your
+  **public key** (*Copy public key*), added under *Trusted issuers & shared pattern
+  keys*. Trade-off: anyone who has your public key can also find the watermark and try
+  to remove it.
+* **Private** (the default): verifiers need your public key *and* your pattern key.
+
+For private watermarks:
 
 * Give people your **public key** (*Copy public key*); they add it under *Trusted
   issuers & shared pattern keys*.

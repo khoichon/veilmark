@@ -25,6 +25,7 @@ import nacl.secret
 import nacl.signing
 import nacl.utils
 
+from veilmark.crypto import kdf
 from veilmark.storage import paths
 
 FINGERPRINT_DOMAIN = b"veilmark/keyid/v1\x00"
@@ -54,6 +55,18 @@ def key_id(public_key: bytes) -> str:
 
 def pattern_key_id(key: bytes) -> str:
     return hashlib.sha256(b"veilmark/patternkey-id/v1\x00" + key).digest()[:8].hex()
+
+
+def public_pattern_key(public_key: bytes) -> bytes:
+    """Pattern key of *publicly verifiable* watermarks, derived from a signing public key.
+
+    Anyone holding the public key can derive it, so such watermarks can be found (and
+    attacked) by anyone who has the public key. Domain separation keeps it unrelated to
+    every secret pattern key.
+    """
+    if len(public_key) != 32:
+        raise ValueError("Ed25519 public key must be 32 bytes")
+    return kdf.derive_key(public_key, "public-pattern/v1")
 
 
 def format_fingerprint(public_key: bytes) -> str:

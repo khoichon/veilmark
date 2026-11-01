@@ -66,6 +66,8 @@ def status() -> dict[str, Any]:
         "fingerprint": keys.format_fingerprint(me.public_bytes) if me else None,
         "public_line": f"veilmark-ed25519 {me.public_key} {me.label}" if me else None,
         "pattern_keys": [{"key_id": k.key_id, "label": k.label} for k in pks],
+        # Trusted issuers' public keys alone can find their publicly verifiable watermarks.
+        "can_detect": bool(_vm.detection_pattern_keys()),
         "trusted": [
             {
                 "key_id": t.key_id,
@@ -190,8 +192,11 @@ def embed(
     self_check: bool,
     progress: Callable[[float, str], Any] | None = None,
     allow_rewatermark: bool = False,
+    public: bool = False,
 ) -> dict[str, Any]:
-    """Watermark image bytes; returns the result dict plus the encoded output bytes."""
+    """Watermark image bytes; returns the result dict plus the encoded output bytes.
+
+    ``public``: publicly verifiable (pattern derived from the signing public key)."""
     rep = _reporter(progress)
     if not status()["has_keys"]:
         raise InputError("generate or load keys first")
@@ -206,6 +211,7 @@ def embed(
         strength=parse_strength(strength),
         quality=int(quality),
         allow_rewatermark=bool(allow_rewatermark),
+        public=bool(public),
     )
     out, res = _vm.embed_image_data(img, spec, rep.sub(0.05, 0.55 if self_check else 0.9))
     rep(0.56 if self_check else 0.92, "encoding output")
@@ -235,8 +241,11 @@ def detect(
     data: bytes, name: str, thorough: bool = True, progress: Callable[[float, str], Any] | None = None
 ) -> dict[str, Any]:
     rep = _reporter(progress)
-    if not _vm.keystore.pattern_keys():
-        raise InputError("load your keys (or a shared pattern key) first: detection needs a pattern key")
+    if not _vm.detection_pattern_keys():
+        raise InputError(
+            "add the issuer's public key (enough for publicly verifiable watermarks) or their "
+            "pattern key, or load your own keys"
+        )
     rep(0.02, "reading image")
     img = _load(_as_bytes(data), name)
     r = _vm.detect_image_data(img, name or "image", reporter=rep.sub(0.05, 1.0), deep=bool(thorough))

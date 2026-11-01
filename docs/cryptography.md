@@ -10,6 +10,7 @@ primitives are implemented in Veilmark.
 | Payload signatures | Ed25519 (PyNaCl `SigningKey`/`VerifyKey`) |
 | Private-key encryption at rest | Argon2id (`nacl.pwhash`, `MODERATE` limits) → XSalsa20-Poly1305 (`SecretBox`) |
 | Secret pattern derivation | SHAKE-256 XOF keyed with the 32-byte pattern key, length-prefixed domain separation (`crypto/kdf.py`) |
+| Public pattern key (publicly verifiable watermarks) | SHAKE-256 `derive_key(public key, "public-pattern/v1")` (`keys.public_pattern_key`) |
 | Key ids / fingerprints | SHA-256(`"veilmark/keyid/v1\0"` ‖ public key) |
 | Integrity in the channel | CRC-16 (core), CRC-32 (payload) — error detection only, not security |
 
@@ -33,6 +34,17 @@ payload, so different serialisers cannot produce ambiguous signed messages.
 The 64-bit **watermark id** is random per watermark (CSPRNG), travels in the robust
 core layer, and is bound into the signature, so a valid payload cannot be moved under
 another id (tested: `forgery-swapped-id`).
+
+## Publicly verifiable watermarks
+
+`WatermarkSpec(public=True)` (CLI `--public`, GUI and web checkbox) embeds with a pattern
+key derived from the signing identity's Ed25519 public key instead of a stored secret
+pattern key. Detection always tries, besides the stored pattern keys, the derived key of
+every own identity and every trusted issuer, so a verifier needs only the issuer's public
+key. Such watermarks must be signed. Because the derived key is public, anyone with the
+public key can locate, remove or transplant these watermarks (see
+[threat-model.md](threat-model.md)); the signature still prevents forging new payloads.
+Reports flag them with `diagnostics.publicly_verifiable`.
 
 ## Verification result
 
