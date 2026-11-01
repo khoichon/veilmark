@@ -168,6 +168,24 @@ class Veilmark:
         kid = keys_mod.pattern_key_id(key)
         return keys_mod.PatternKey(kid, f"public: {ident.label}", keys_mod.b64e(key), 0)
 
+    def keyring_tiers(self, ref: str | None = None) -> list[tuple[list[KeyedPatterns], list[str]]]:
+        """Pattern keys for detection, in the order to search them.
+
+        Detection cost grows with every key, so stored (secret) keys are searched first,
+        exactly as before publicly verifiable watermarks existed; the public keys are
+        searched only when that finds nothing. A watermark made with a stored key thus
+        costs no more to detect than it used to.
+        """
+        if ref is not None:
+            return [self.keyring(ref)]
+        stored = self.keystore.pattern_keys()
+        seen = {k.key_id for k in stored}
+        public = [k for k in self.public_pattern_keys() if k.key_id not in seen]
+        tiers = [t for t in (stored, public) if t]
+        if not tiers:
+            self.keyring()  # raises the explanatory error
+        return [([KeyedPatterns(k.key_bytes) for k in t], [k.key_id for k in t]) for t in tiers]
+
     def keyring(self, ref: str | None = None) -> tuple[list[KeyedPatterns], list[str]]:
         """Pattern keys to try during detection (one, or all known keys)."""
         pk = [self.keystore.pattern_key(ref)] if ref is not None else self.detection_pattern_keys()
@@ -350,10 +368,15 @@ class Veilmark:
         Uses the fast detector; a watermark made with someone else's pattern key cannot
         be seen and is therefore not reported here.
         """
-        pks = self.detection_pattern_keys()
-        if not pks:
+        if not self.detection_pattern_keys():
             return []
-        keyring = [KeyedPatterns(k.key_bytes) for k in pks]
+        for keyring, _ in self.keyring_tiers():
+            found = self._existing_with(img, keyring)
+            if found:
+                return found
+        return []
+
+    def _existing_with(self, img: image_io.ImageData, keyring: list[KeyedPatterns]) -> list[dict[str, Any]]:
         det = engine.detect_luma(img.luma(), keyring, deep=False)
         if det.best is None or det.best.hit is None:
             return []
@@ -385,18 +408,48 @@ class Veilmark:
         runs when the fast search finds nothing."""
         rep = reporter or Reporter()
         t0 = time.perf_counter()
-        keyring, kids = self.keyring(pattern_key)
+        tiers = self.keyring_tiers(pattern_key)
         rep(0.1, "searching for watermark geometry")
         if backend != "tss":
             return self._detect_plugin_backend(img, source, backend, pattern_key, t0)
-        det = engine.detect_luma(img.luma(), keyring, deep=deep, progress=lambda f, m: rep(0.1 + 0.8 * f, m))
-        rep(0.9, "verifying payload")
+        first: report_mod.DetectionReport | None = None
+        searched = 0
+        for i, (keyring, kids) in enumerate(tiers):
+            lo, hi = 0.1 + 0.8 * i / len(tiers), 0.1 + 0.8 * (i + 1) / len(tiers)
+            r, n = self._detect_with(img, source, keyring, kids, deep, rep.sub(lo, hi), searched)
+            searched += n
+            if r.detected:
+                break
+            first = first or r
+        else:
+            r = first if first is not None else r
+        r.diagnostics["image_size"] = [img.width, img.height]
+        r.diagnostics["seconds"] = round(time.perf_counter() - t0, 3)
+        r.notes = list(img.notes) + r.notes
+        rep(1.0, "done")
+        return r
+
+    def _detect_with(
+        self,
+        img: image_io.ImageData,
+        source: str,
+        keyring: list[KeyedPatterns],
+        kids: list[str],
+        deep: bool,
+        rep: Reporter,
+        searched_before: int,
+    ) -> tuple[report_mod.DetectionReport, int]:
+        """One detection pass with one set of keys. The false-alarm estimate counts the
+        positions searched by earlier passes too (``searched_before``)."""
+        det = engine.detect_luma(img.luma(), keyring, deep=deep, progress=lambda f, m: rep(0.95 * f, m))
+        rep(0.95, "verifying payload")
+        searched = searched_before + det.searched_positions
         z = det.best.hit.z if det.best and det.best.hit else 0.0
         r = report_mod.interpret(
             source,
             "image",
             z,
-            det.searched_positions,
+            searched,
             det.outcome,
             self.trust,
             self.own_public_keys(),
@@ -409,7 +462,7 @@ class Veilmark:
                 source,
                 "image",
                 z_extra,
-                det.searched_positions,
+                searched,
                 out,
                 self.trust,
                 self.own_public_keys(),
@@ -438,11 +491,7 @@ class Veilmark:
                 r.diagnostics["publicly_verifiable"] = r.detected and kids[det.best.hit.key_index] in {
                     k.key_id for k in self.public_pattern_keys()
                 }
-        r.diagnostics["image_size"] = [img.width, img.height]
-        r.diagnostics["seconds"] = round(time.perf_counter() - t0, 3)
-        r.notes = list(img.notes) + r.notes
-        rep(1.0, "done")
-        return r
+        return r, det.searched_positions
 
     def _detect_plugin_backend(
         self, img: image_io.ImageData, source: str, backend: str, pattern_key: str | None, t0: float

@@ -290,7 +290,37 @@ def detect_video(
     t0 = time.perf_counter()
     path = check_input_file(Path(path), vm.limits)
     info = ffmpeg.probe(path)
-    keyring, kids = vm.keyring(pattern_key)
+    # Stored keys first; public keys only if nothing was found (see Veilmark.keyring_tiers).
+    tiers = vm.keyring_tiers(pattern_key)
+    first: report_mod.DetectionReport | None = None
+    searched = 0
+    for i, (keyring, kids) in enumerate(tiers):
+        sub = rep.sub(i / len(tiers), (i + 1) / len(tiers))
+        r, n = _detect_video_with(vm, path, info, keyring, kids, max_frames, stride, sub, searched)
+        searched += n
+        if r.detected:
+            break
+        first = first or r
+    else:
+        r = first if first is not None else r
+    r.diagnostics["seconds"] = round(time.perf_counter() - t0, 2)
+    rep(1.0, "done")
+    return r
+
+
+def _detect_video_with(
+    vm: Veilmark,
+    path: Path,
+    info: ffmpeg.VideoInfo,
+    keyring: list[KeyedPatterns],
+    kids: list[str],
+    max_frames: int,
+    stride: int | None,
+    rep: Reporter,
+    searched_before: int,
+) -> tuple[report_mod.DetectionReport, int]:
+    """One detection pass over the video with one set of keys."""
+    t0 = time.perf_counter()
     total = info.frames or int(max(1.0, info.duration) * float(info.fps))
     if stride is None:
         stride = max(1, math.ceil(total / max(1, max_frames)))
@@ -311,7 +341,7 @@ def detect_video(
         r = report_mod.interpret(str(path), "video", 0.0, 1, None, vm.trust, vm.own_public_keys(), kids)
         r.notes.append("no plausible watermark geometry found")
         r.diagnostics.update(diag)
-        return r
+        return r, 0
     lat = geo.lattice
     pats = keyring[geo.key_index]
 
@@ -389,7 +419,7 @@ def detect_video(
 
     searched = (len(keyring) * 15) * NUM_VARIANTS * 8 * P0 * P0 * 2
     r = report_mod.interpret(
-        str(path), "video", sync_z, searched, outcome, vm.trust, vm.own_public_keys(), kids
+        str(path), "video", sync_z, searched_before + searched, outcome, vm.trust, vm.own_public_keys(), kids
     )
     r.geometry = lat.describe()
     seg_changes = sum(1 for a, b in itertools.pairwise(timeline) if a[1] != b[1])
@@ -414,4 +444,4 @@ def detect_video(
     if nf * stride < total * 0.5 and stride > 1:
         r.notes.append(f"analysed every {stride}th frame (max_frames={max_frames})")
     rep(1.0, "done")
-    return r
+    return r, searched

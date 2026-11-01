@@ -44,7 +44,11 @@ every own identity and every trusted issuer, so a verifier needs only the issuer
 key. Such watermarks must be signed. Because the derived key is public, anyone with the
 public key can locate, remove or transplant these watermarks (see
 [threat-model.md](threat-model.md)); the signature still prevents forging new payloads.
-Reports flag them with `diagnostics.publicly_verifiable`.
+Reports flag them with `diagnostics.publicly_verifiable`. Because every extra key adds a full
+search, detection tries the stored (secret) pattern keys first, exactly as without this
+feature, and the public keys only when that finds nothing; the false-alarm estimate of
+a public-key match counts both searches. A watermark made with a stored key costs no
+more to detect than before, while an unwatermarked image costs one extra search.
 
 ## Verification result
 
