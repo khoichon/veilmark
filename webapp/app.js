@@ -78,7 +78,7 @@ async function onReady(info) {
   $("engine").classList.add("done");
   $("boot-msg").textContent = "Engine ready · processing stays on this device";
   $("about").textContent = `Veilmark ${info.version} · Python runtime: Pyodide ${info.pyodide}`;
-  for (const id of ["btn-generate", "btn-open", "btn-trust-add", "btn-pattern-add"]) $(id).disabled = false;
+  for (const id of ["btn-generate", "btn-open"]) $(id).disabled = false;
   showRemembered();
   render(await call("status"));
 }

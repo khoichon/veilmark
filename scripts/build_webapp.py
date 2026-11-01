@@ -30,6 +30,33 @@ PACKAGES = ["numpy", "opencv-python", "pillow", "pynacl", "cffi", "pycparser"]
 # Engine modules the browser does not need (desktop GUI, CLI, video, benchmarks, plugins, web helper).
 EXCLUDE = {"app", "benchmarks", "cli", "web", "video", "plugins"}
 STATIC = ["index.html", "style.css", "app.js", "worker.js", "bridge.py"]
+# Asset references stamped with a build version, so browsers never mix cached files from
+# different deploys (static hosts cache .js longer than .html). (file, reference)
+VERSIONED = [
+    ("index.html", 'href="style.css"'),
+    ("index.html", 'src="app.js"'),
+    ("app.js", 'new Worker("worker.js"'),
+    ("worker.js", 'fetch("veilmark.zip")'),
+    ("worker.js", 'fetch("bridge.py")'),
+]
+
+
+def stamp_versions(out: Path) -> str:
+    """Append ``?v=<content hash>`` to every asset reference in VERSIONED."""
+    h = hashlib.sha256()
+    for name in [*STATIC, "veilmark.zip"]:
+        h.update(name.encode() + b"\0" + (out / name).read_bytes())
+    version = h.hexdigest()[:12]
+    for name, ref in VERSIONED:
+        path = out / name
+        text = path.read_text(encoding="utf-8")
+        if text.count(ref) != 1:
+            raise SystemExit(f"build: expected exactly one {ref!r} in {name}")
+        asset = ref.rsplit('"', 2)[1]
+        path.write_text(
+            text.replace(ref, ref.replace(f'"{asset}"', f'"{asset}?v={version}"')), encoding="utf-8"
+        )
+    return version
 
 
 def build_zip(dest: Path) -> int:
@@ -80,13 +107,14 @@ def main() -> int:
     for name in STATIC:
         shutil.copy2(ROOT / "webapp" / name, out / name)
     size = build_zip(out / "veilmark.zip")
+    version = stamp_versions(out)
     cfg: dict[str, object] = {"pyodide_version": PYODIDE_VERSION}
     if args.vendor_pyodide:
         n = vendor(out)
         cfg["pyodide_base"] = "./pyodide/"
         print(f"vendored Pyodide runtime: {n / 1e6:.1f} MB")
     (out / "config.json").write_text(json.dumps(cfg, indent=2) + "\n")
-    print(f"built {out} (engine zip {size / 1e3:.0f} kB)")
+    print(f"built {out} (engine zip {size / 1e3:.0f} kB, asset version {version})")
     print(f"preview: python -m http.server -d {out} 8000  ->  http://127.0.0.1:8000/")
     return 0
 
