@@ -1,0 +1,9 @@
+{
+  "name": "veilmark-webapp-smoke",
+  "private": true,
+  "type": "module",
+  "description": "Runs the browser engine path (Pyodide/WebAssembly) under Node.js",
+  "dependencies": {
+    "pyodide": "314.0.7"
+  }
+}

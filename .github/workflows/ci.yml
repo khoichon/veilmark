@@ -1,0 +1,107 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  QT_QPA_PLATFORM: offscreen
+  PYTHONUNBUFFERED: "1"
+
+jobs:
+  lint:
+    name: Lint, format & types
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.14"
+          enable-cache: true
+      - name: Install (locked)
+        run: uv sync --frozen --all-extras
+      - run: uv run ruff check src tests webapp scripts
+      - run: uv run ruff format --check src tests webapp scripts
+      - run: uv run mypy
+
+  test:
+    name: Tests (${{ matrix.os }}, py${{ matrix.python }}${{ matrix.full && ', incl. video' || '' }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, python: "3.14", full: true }
+          - { os: ubuntu-latest, python: "3.13", full: false }
+          - { os: ubuntu-latest, python: "3.12", full: false }
+          - { os: ubuntu-latest, python: "3.11", full: false }
+          - { os: macos-latest, python: "3.14", full: true }
+          - { os: windows-latest, python: "3.14", full: false }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: ${{ matrix.python }}
+          enable-cache: true
+      - name: System packages (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ffmpeg libegl1 libgl1 libxkbcommon0 libfontconfig1 libdbus-1-3
+      - name: FFmpeg (macOS)
+        if: runner.os == 'macOS'
+        run: brew install ffmpeg
+      - name: FFmpeg (Windows)
+        if: runner.os == 'Windows'
+        run: choco install ffmpeg -y --no-progress
+      - name: Install (locked)
+        run: uv sync --frozen --all-extras
+      - name: Environment check
+        run: uv run veilmark doctor || true
+      - name: Tests (all, including video)
+        if: matrix.full
+        run: uv run pytest -q
+      - name: Tests (without slow video tests)
+        if: ${{ !matrix.full }}
+        run: uv run pytest -q -m "not slow"
+
+  webapp:
+    name: Web app (build + WebAssembly smoke test)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.14"
+          enable-cache: true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: tests/webapp/package-lock.json
+      - run: uv sync --frozen --all-extras
+      - name: Build static site (vendored Pyodide, checksums verified)
+        run: uv run python scripts/build_webapp.py --vendor-pyodide --out dist/web
+      - name: Bridge tests (CPython)
+        run: uv run pytest -q tests/end_to_end/test_webapp.py
+      - name: Smoke test on the real Pyodide/WebAssembly runtime
+        working-directory: tests/webapp
+        run: |
+          npm ci
+          node smoke.mjs ../../dist/web
+      - uses: actions/upload-artifact@v4
+        with:
+          name: veilmark-web
+          path: dist/web
+          retention-days: 14

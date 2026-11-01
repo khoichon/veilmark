@@ -1,0 +1,74 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "veilmark"
+version = "0.1.0"
+description = "Local-first robust invisible watermarking for images and video, with signed payloads"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+authors = [{ name = "Veilmark contributors" }]
+dependencies = [
+  "numpy>=2.0",
+  "opencv-python-headless>=4.10",
+  "pillow>=11.0",
+  "pynacl>=1.5",
+]
+
+[project.optional-dependencies]
+gui = ["PySide6-Essentials>=6.8"]
+bench = ["scikit-image>=0.24"]
+dev = [
+  "pytest>=8.0",
+  "ruff>=0.6",
+  "mypy>=1.11",
+  "scikit-image>=0.24",
+]
+
+[project.scripts]
+veilmark = "veilmark.cli.main:main"
+
+[project.gui-scripts]
+veilmark-gui = "veilmark.app.main:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/veilmark"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+norecursedirs = ["node_modules", ".*", "dist"]
+markers = [
+  "slow: long-running tests (video, large images)",
+  "video: requires ffmpeg",
+  "gui: requires PySide6 and a display/offscreen platform",
+]
+addopts = "-ra"
+
+[tool.ruff]
+line-length = 110
+target-version = "py311"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "S", "SIM", "RUF"]
+ignore = [
+  "S101",   # asserts are fine in tests
+  "S603",   # subprocess calls use argument lists (no shell); see video/ffmpeg.py
+  "RUF001", "RUF002", "RUF003",
+  "E501",   # the formatter owns line length; long strings are left intact
+  "RUF046", # int(round(x)) is deliberate: round() of NumPy scalars is not always int
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S", "B"]
+"scripts/**" = ["S"]
+
+[tool.mypy]
+python_version = "3.11"
+files = ["src/veilmark"]
+ignore_missing_imports = true
+warn_unused_ignores = true
+check_untyped_defs = true
+exclude = ["src/veilmark/app/"]

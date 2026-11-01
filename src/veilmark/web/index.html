@@ -1,0 +1,175 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Veilmark helper</title>
+<style>
+:root {
+  --bg: #f6f5f2; --panel: #ffffff; --fg: #1d1d1f; --muted: #6b6b70; --line: #e2e0da;
+  --accent: #2f5d8a; --ok: #1a7f37; --warn: #9a6700; --bad: #cf222e; --drop: #eef3f8;
+}
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #161618; --panel: #1f1f22; --fg: #ececec; --muted: #a0a0a6; --line: #333338;
+          --accent: #7fb0e0; --ok: #4ac26b; --warn: #d4a72c; --bad: #ff6b6b; --drop: #23292f; }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--fg); font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+header { padding: 20px 16px 8px; max-width: 1100px; margin: 0 auto; }
+h1 { margin: 0; font-size: 22px; letter-spacing: -0.01em; }
+.sub { color: var(--muted); font-size: 13px; }
+main { max-width: 1100px; margin: 0 auto; padding: 8px 16px 40px; display: grid; gap: 16px; grid-template-columns: 1fr 1fr; }
+@media (max-width: 820px) { main { grid-template-columns: 1fr; } }
+section { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 16px; min-width: 0; }
+h2 { margin: 0 0 12px; font-size: 16px; }
+label { display: block; font-size: 13px; color: var(--muted); margin: 10px 0 4px; }
+input[type=text], input[type=password], select { width: 100%; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--fg); font: inherit; }
+input[type=range] { width: 100%; }
+.row { display: flex; gap: 12px; } .row > div { flex: 1; min-width: 0; }
+.drop { border: 2px dashed var(--line); border-radius: 10px; padding: 22px 12px; text-align: center; color: var(--muted); background: var(--drop); cursor: pointer; overflow-wrap: anywhere; }
+.drop.over { border-color: var(--accent); color: var(--fg); }
+button { margin-top: 14px; width: 100%; padding: 10px; border: 0; border-radius: 8px; background: var(--accent); color: #fff; font: 600 15px system-ui, sans-serif; cursor: pointer; }
+button:disabled { opacity: .5; cursor: progress; }
+.out { margin-top: 14px; font-size: 14px; overflow-wrap: anywhere; }
+.badge { display: inline-block; padding: 1px 9px; border-radius: 999px; color: #fff; font-size: 12px; font-weight: 600; margin-left: 6px; vertical-align: 1px; }
+.ok { background: var(--ok); } .warn { background: var(--warn); } .bad { background: var(--bad); } .na { background: var(--muted); }
+.step { margin: 8px 0; }
+code { background: var(--bg); padding: 1px 5px; border-radius: 4px; }
+.small { font-size: 12px; color: var(--muted); }
+.err { color: var(--bad); }
+a.dl { display: inline-block; margin-top: 8px; color: var(--accent); font-weight: 600; }
+footer { max-width: 1100px; margin: 0 auto; padding: 0 16px 30px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Veilmark</h1>
+  <div class="sub">Local helper · v__VERSION__ · files are processed on this computer only · <span id="keys">loading keys…</span></div>
+</header>
+<main>
+  <section aria-labelledby="wm-h">
+    <h2 id="wm-h">Watermark</h2>
+    <div class="drop" id="wm-drop" tabindex="0" role="button" aria-label="Choose an image or video to watermark">Drop an image or video here, or click to choose</div>
+    <input type="file" id="wm-file" hidden accept="image/*,video/*">
+    <label for="wm-text">Hidden text (short text is more robust)</label>
+    <input type="text" id="wm-text" maxlength="120" placeholder="© Studio North 2026">
+    <div class="row">
+      <div><label for="wm-id">Signing identity</label><select id="wm-id"></select></div>
+      <div><label for="wm-fmt">Image output</label>
+        <select id="wm-fmt"><option value="same">same as input</option><option>png</option><option>jpg</option><option>webp</option></select></div>
+    </div>
+    <div id="pw-row" hidden><label for="wm-pw">Passphrase for the signing key</label><input type="password" id="wm-pw" autocomplete="off"></div>
+    <label for="wm-str">Strength <span id="wm-str-v">1.0</span> (higher = more robust, more visible)</label>
+    <input type="range" id="wm-str" min="0.5" max="2" step="0.1" value="1">
+    <button id="wm-go" disabled>Watermark</button>
+    <div class="out" id="wm-out" aria-live="polite"></div>
+  </section>
+  <section aria-labelledby="dt-h">
+    <h2 id="dt-h">Detect &amp; verify</h2>
+    <div class="drop" id="dt-drop" tabindex="0" role="button" aria-label="Choose media to check">Drop media to check, or click to choose</div>
+    <input type="file" id="dt-file" hidden accept="image/*,video/*">
+    <button id="dt-go" disabled>Detect</button>
+    <div class="out" id="dt-out" aria-live="polite"></div>
+  </section>
+</main>
+<footer class="small">A valid signature shows only that the hidden payload was signed by the listed key; it does not prove the media is unedited or who created it. Watermarks can be weakened or removed. Not a substitute for backups, access control, copyright registration or legal evidence.</footer>
+<script>
+const TOKEN = "__TOKEN__";
+const H = {"X-Veilmark-Token": TOKEN};
+const $ = id => document.getElementById(id);
+const esc = s => String(s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+let wmFile = null, dtFile = null, idents = [];
+
+function wireDrop(dropId, inputId, onFile) {
+  const d = $(dropId), inp = $(inputId);
+  d.onclick = () => inp.click();
+  d.onkeydown = e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); inp.click(); } };
+  inp.onchange = () => inp.files[0] && onFile(inp.files[0], d);
+  d.ondragover = e => { e.preventDefault(); d.classList.add("over"); };
+  d.ondragleave = () => d.classList.remove("over");
+  d.ondrop = e => { e.preventDefault(); d.classList.remove("over"); e.dataTransfer.files[0] && onFile(e.dataTransfer.files[0], d); };
+}
+wireDrop("wm-drop", "wm-file", (f, d) => { wmFile = f; d.textContent = f.name; $("wm-go").disabled = false; });
+wireDrop("dt-drop", "dt-file", (f, d) => { dtFile = f; d.textContent = f.name; $("dt-go").disabled = false; });
+$("wm-str").oninput = e => $("wm-str-v").textContent = Number(e.target.value).toFixed(1);
+$("wm-id").onchange = () => { const i = idents.find(x => x.key_id === $("wm-id").value); $("pw-row").hidden = !(i && i.encrypted); };
+
+async function status() {
+  const r = await fetch("/api/status", {headers: H});
+  const s = await r.json();
+  idents = s.identities;
+  const sel = $("wm-id");
+  sel.innerHTML = idents.map(i => `<option value="${esc(i.key_id)}">${esc(i.label)} (${esc(i.key_id)})</option>`).join("")
+    + `<option value="none">Unsigned (no authenticity)</option>`;
+  sel.onchange();
+  $("keys").textContent = s.pattern_keys.length
+    ? `${s.pattern_keys.length} pattern key(s), ${idents.length} signing identit${idents.length === 1 ? "y" : "ies"}, ${s.trusted_issuers} trusted issuer(s)`
+    : "no keys yet: run `veilmark keys init` first";
+}
+
+async function upload(path, file, params, extra) {
+  const q = new URLSearchParams({name: file.name, ...params});
+  const r = await fetch(`${path}?${q}`, {method: "POST", headers: {...H, ...extra}, body: file});
+  const j = await r.json();
+  if (!r.ok) throw new Error(j.error || r.statusText);
+  return j;
+}
+
+$("wm-go").onclick = async () => {
+  const b = $("wm-go"), out = $("wm-out");
+  b.disabled = true; out.innerHTML = "Working… (videos take a while)";
+  try {
+    const extra = $("pw-row").hidden ? {} : {"X-Veilmark-Passphrase": $("wm-pw").value};
+    const r = await upload("/api/watermark", wmFile, {text: $("wm-text").value, identity: $("wm-id").value,
+      strength: $("wm-str").value, format: $("wm-fmt").value}, extra);
+    out.innerHTML = `<div>Watermark id <code>${esc(r.watermark_id)}</code>${r.signed ? '<span class="badge ok">signed</span>' : '<span class="badge warn">unsigned</span>'}</div>
+      <div class="small">PSNR ${esc(r.psnr_db)} dB${r.ssim ? " · SSIM " + esc(r.ssim) : ""} · payload ${esc(r.payload_bytes)} bytes · chip ${esc(r.chip_px)} px</div>
+      ${(r.notes || []).map(n => `<div class="small">note: ${esc(n)}</div>`).join("")}
+      <a class="dl" href="${esc(r.download)}" download>Download ${esc(r.output)}</a> <span class="small">(available once)</span>`;
+    out.querySelector("a.dl").onclick = async e => {
+      e.preventDefault();
+      const resp = await fetch(r.download, {headers: H});
+      if (!resp.ok) { out.insertAdjacentHTML("beforeend", '<div class="err">download expired</div>'); return; }
+      const url = URL.createObjectURL(await resp.blob());
+      const a = document.createElement("a"); a.href = url; a.download = r.output; a.click(); URL.revokeObjectURL(url);
+    };
+  } catch (e) { out.innerHTML = `<div class="err">${esc(e.message)}</div>`; }
+  b.disabled = false;
+};
+
+const ST = {"payload-recovered": ["Payload recovered", "ok"], "id-only": ["Watermark id only", "warn"],
+            "signal-only": ["Signal present, payload unreadable", "warn"], "not-detected": ["No watermark detected", "na"]};
+const SIG = {"valid": ["valid", "ok"], "invalid": ["INVALID: altered or forged", "bad"], "unsigned": ["unsigned", "warn"],
+             "unknown-key": ["unknown key", "warn"], "unverifiable": ["could not be checked", "warn"]};
+const TR = {"trusted": ["trusted", "ok"], "untrusted": ["not in your trust list", "bad"], "revoked": ["revoked", "bad"],
+            "expired": ["expired", "bad"], "not-yet-valid": ["not yet valid", "bad"], "n/a": ["n/a", "na"]};
+const badge = ([t, c]) => `<span class="badge ${c}">${esc(t)}</span>`;
+
+$("dt-go").onclick = async () => {
+  const b = $("dt-go"), out = $("dt-out");
+  b.disabled = true; out.innerHTML = "Searching…";
+  try {
+    const r = await upload("/api/detect", dtFile, {}, {});
+    const c = r.confidence || {};
+    let h = `<div class="step"><b>1. Detection</b>${badge(ST[r.status] || [r.status, "na"])}</div>
+      <div class="small">sync z ${esc(c.sync_z)} (threshold ${esc(c.sync_present_threshold)})${c.core_agreement != null ? " · core agreement " + esc(c.core_agreement) : ""}</div>`;
+    if (r.watermark_id) h += `<div>Watermark id <code>${esc(r.watermark_id)}</code></div>`;
+    if (r.payload) {
+      if (r.payload.text != null) h += `<div>Text: <code>${esc(r.payload.text)}</code></div>`;
+      if (r.payload.timestamp_iso) h += `<div class="small">Timestamp ${esc(r.payload.timestamp_iso)} (claimed by the signer)</div>`;
+    }
+    if (r.verification) {
+      const v = r.verification;
+      h += `<div class="step"><b>2. Signature</b>${badge(SIG[v.signature] || [v.signature, "na"])}</div>
+        <div class="step"><b>3. Issuer</b>${badge(TR[v.trust] || [v.trust, "na"])} ${v.issuer_label ? esc(v.issuer_label) + " (" + esc(v.issuer_key_id) + ")" : ""}</div>
+        <div class="small">${esc(v.message)}</div>`;
+    }
+    (r.notes || []).forEach(n => h += `<div class="small">note: ${esc(n)}</div>`);
+    out.innerHTML = h;
+  } catch (e) { out.innerHTML = `<div class="err">${esc(e.message)}</div>`; }
+  b.disabled = false;
+};
+status().catch(e => $("keys").textContent = "cannot reach the local server: " + e.message);
+</script>
+</body>
+</html>

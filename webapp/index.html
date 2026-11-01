@@ -1,0 +1,166 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>Veilmark Web</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="top">
+  <div>
+    <h1>Veilmark <span class="tag">web</span></h1>
+    <p class="sub">Invisible, signed image watermarks. Everything runs in this browser tab: your images and keys never leave your computer.</p>
+  </div>
+  <div class="engine" id="engine" aria-live="polite">
+    <div class="bar small"><div class="fill" id="boot-fill"></div></div>
+    <span id="boot-msg">Starting…</span>
+  </div>
+</header>
+
+<main>
+  <!-- ============================== KEYS ============================== -->
+  <section class="card" id="keys-card" aria-labelledby="keys-h">
+    <h2 id="keys-h"><span class="step">1</span> Your keys</h2>
+    <div id="keys-empty">
+      <p>You need a key pair: a <b>signing key</b> proves the hidden text came from you, and a secret
+        <b>pattern key</b> places and finds the watermark. Create new keys or open a keyfile you saved before.</p>
+      <div class="row">
+        <button class="primary" id="btn-generate" disabled>Create new keys</button>
+        <button id="btn-open" disabled>Open keyfile…</button>
+        <input type="file" id="keyfile-input" accept=".json,.vmkey,application/json" hidden>
+      </div>
+      <div id="remembered" hidden class="notice">
+        <p>Keys for <b id="remembered-label"></b> are saved (encrypted) on this device.</p>
+        <div class="row">
+          <button class="primary" id="btn-unlock">Unlock</button>
+          <button class="link" id="btn-forget-device">Forget this device's copy</button>
+        </div>
+      </div>
+    </div>
+    <div id="keys-loaded" hidden>
+      <div class="identity">
+        <div>
+          <div class="label" id="id-label"></div>
+          <div class="mono small-text" id="id-fp" title="Public key fingerprint"></div>
+        </div>
+        <span class="pill ok">ready</span>
+      </div>
+      <div class="row wrap">
+        <button class="primary" id="btn-save">Save keyfile…</button>
+        <button id="btn-copy-pub">Copy public key</button>
+        <button class="link" id="btn-close-keys">Close keys</button>
+      </div>
+      <p class="warn" id="unsaved" hidden>These keys exist only in this tab. Save a keyfile, or they are gone when you close it.</p>
+      <details>
+        <summary>Trusted issuers &amp; shared pattern keys</summary>
+        <p class="small-text">Signatures are “trusted” only for keys in this list (your own is added automatically). To verify
+          someone else's images you also need their pattern key.</p>
+        <ul id="trust-list" class="trust"></ul>
+        <label for="trust-line">Add an issuer's public key</label>
+        <div class="row"><input id="trust-line" placeholder="veilmark-ed25519 AAAA… name" autocomplete="off"><button id="btn-trust-add">Add</button></div>
+        <label for="pattern-line">Add a shared pattern key</label>
+        <div class="row"><input id="pattern-line" placeholder="veilmark-pattern AAAA… name" autocomplete="off"><button id="btn-pattern-add">Add</button></div>
+      </details>
+    </div>
+  </section>
+
+  <!-- ============================ WATERMARK ============================ -->
+  <section class="card" id="wm-card" aria-labelledby="wm-h">
+    <h2 id="wm-h"><span class="step">2</span> Watermark an image</h2>
+    <div class="drop" id="wm-drop" tabindex="0" role="button" aria-label="Choose an image to watermark">
+      <span>Drop an image here or <u>choose a file</u></span>
+      <small>PNG, JPEG or WebP · up to 40 megapixels</small>
+    </div>
+    <input type="file" id="wm-file" accept="image/png,image/jpeg,image/webp" hidden>
+    <label for="wm-text">Hidden text <span class="hint" id="wm-count">0 / 60</span></label>
+    <input id="wm-text" maxlength="60" placeholder="© Studio North 2026" autocomplete="off">
+    <div class="row cols">
+      <div>
+        <label for="wm-strength">Strength</label>
+        <select id="wm-strength">
+          <option value="subtle">Subtle (least visible, fragile)</option>
+          <option value="balanced" selected>Balanced</option>
+          <option value="robust">Robust (more visible)</option>
+        </select>
+      </div>
+      <div>
+        <label for="wm-format">Save as</label>
+        <select id="wm-format">
+          <option value="same">Same as input</option>
+          <option value="png">PNG (lossless)</option>
+          <option value="jpg">JPEG (quality 92)</option>
+          <option value="webp">WebP (quality 92)</option>
+        </select>
+      </div>
+    </div>
+    <label class="check"><input type="checkbox" id="wm-selfcheck" checked> Check the result can be read back (slower, recommended)</label>
+    <label class="check" id="wm-rewm-row" hidden><input type="checkbox" id="wm-rewm"> Add my watermark anyway (both stay detectable)</label>
+    <button class="primary wide" id="wm-go" disabled>Watermark</button>
+    <div class="job" id="wm-job" hidden>
+      <div class="bar"><div class="fill" id="wm-fill"></div></div>
+      <div class="job-row"><span id="wm-msg">Working…</span><span class="elapsed" id="wm-time"></span><button class="link" id="wm-cancel">Cancel</button></div>
+    </div>
+    <div id="wm-out" class="out" aria-live="polite"></div>
+  </section>
+
+  <!-- ============================== DETECT ============================= -->
+  <section class="card" id="dt-card" aria-labelledby="dt-h">
+    <h2 id="dt-h"><span class="step">3</span> Detect &amp; verify</h2>
+    <div class="drop" id="dt-drop" tabindex="0" role="button" aria-label="Choose an image to check">
+      <span>Drop an image to check or <u>choose a file</u></span>
+      <small>Cropped, resized, recompressed or recoloured copies are fine</small>
+    </div>
+    <input type="file" id="dt-file" accept="image/*" hidden>
+    <label class="check"><input type="checkbox" id="dt-thorough" checked> Thorough search if nothing is found at first (slower)</label>
+    <button class="primary wide" id="dt-go" disabled>Detect</button>
+    <div class="job" id="dt-job" hidden>
+      <div class="bar"><div class="fill" id="dt-fill"></div></div>
+      <div class="job-row"><span id="dt-msg">Working…</span><span class="elapsed" id="dt-time"></span><button class="link" id="dt-cancel">Cancel</button></div>
+    </div>
+    <div id="dt-out" class="out" aria-live="polite"></div>
+  </section>
+</main>
+
+<footer>
+  <p>A valid signature shows only that the hidden text was signed by the listed key. It does not prove an image is
+    unedited, who made it, or that its content is true. Watermarks can be weakened or removed, and absence of a
+    watermark proves nothing. Not a substitute for backups, access control, copyright registration or legal evidence.</p>
+  <p class="small-text" id="about"></p>
+</footer>
+
+<dialog id="pw-dialog">
+  <form method="dialog" id="pw-form">
+    <h3 id="pw-title">Passphrase</h3>
+    <p id="pw-text" class="small-text"></p>
+    <label for="pw-1">Passphrase</label>
+    <input type="password" id="pw-1" autocomplete="new-password" minlength="8" required>
+    <div id="pw-confirm-row">
+      <label for="pw-2">Repeat passphrase</label>
+      <input type="password" id="pw-2" autocomplete="new-password">
+    </div>
+    <label class="check" id="pw-remember-row"><input type="checkbox" id="pw-remember"> Also keep an encrypted copy on this device</label>
+    <p class="err" id="pw-err"></p>
+    <div class="row end">
+      <button value="cancel" formnovalidate>Cancel</button>
+      <button class="primary" value="ok" id="pw-ok">OK</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="name-dialog">
+  <form method="dialog">
+    <h3>Create new keys</h3>
+    <label for="name-input">Your name or organisation (shown to people who verify your images)</label>
+    <input id="name-input" maxlength="60" placeholder="Studio North" required>
+    <div class="row end">
+      <button value="cancel" formnovalidate>Cancel</button>
+      <button class="primary" value="ok">Create</button>
+    </div>
+  </form>
+</dialog>
+
+<script src="app.js" type="module"></script>
+</body>
+</html>

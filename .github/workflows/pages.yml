@@ -1,0 +1,57 @@
+name: Deploy web app to GitHub Pages
+
+# Publishes the static, client-side Veilmark web app (images are processed in the
+# visitor's browser; nothing is uploaded). Enable Pages with "GitHub Actions" as the
+# source in Settings -> Pages before the first run.
+
+on:
+  push:
+    branches: [main]
+    paths: ["webapp/**", "src/veilmark/**", "scripts/build_webapp.py", ".github/workflows/pages.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.14"
+          enable-cache: true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: tests/webapp/package-lock.json
+      - run: uv sync --frozen --all-extras
+      - name: "Build (vendored runtime: the site makes no third-party requests)"
+        run: uv run python scripts/build_webapp.py --vendor-pyodide --out dist/web
+      - name: Smoke test before publishing
+        working-directory: tests/webapp
+        run: |
+          npm ci
+          node smoke.mjs ../../dist/web
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist/web
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

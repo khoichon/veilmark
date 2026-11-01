@@ -1,0 +1,10 @@
+{
+  "name": "markdown-report",
+  "version": "1.0.0",
+  "api_version": 1,
+  "description": "Exports detection/verification reports as Markdown documents.",
+  "entry": "plugin:register",
+  "kinds": ["exporter"],
+  "permissions": {"filesystem": "none", "network": false, "media": false, "subprocess": false},
+  "author": "Veilmark example"
+}

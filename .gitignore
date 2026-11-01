@@ -1,0 +1,19 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+build/
+dist/
+.veilmark-*
+# benchmark media scratch (reports in benchmarks/results/ are kept)
+veilmark-bench-*
+# local sample media
+exampleimage.png
+examplevideo.mov
+*.wm.*
+*.report.md
+dist/
+node_modules/

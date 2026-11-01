@@ -1,0 +1,52 @@
+name: Robustness benchmark
+
+# Manually triggered: GitHub-hosted runners have 4 cores, so the "standard" profile
+# takes a few hours; "quick" takes ~15 minutes. Reports are uploaded as artifacts.
+
+on:
+  workflow_dispatch:
+    inputs:
+      profile:
+        description: "quick | standard | full"
+        default: quick
+        type: choice
+        options: [quick, standard, full]
+      split:
+        description: "heldout (independent) | dev | all"
+        default: heldout
+        type: choice
+        options: [heldout, dev, all]
+      media:
+        description: "image | video | both"
+        default: both
+        type: choice
+        options: [image, video, both]
+
+permissions:
+  contents: read
+
+jobs:
+  benchmark:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.14"
+          enable-cache: true
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
+      - run: uv sync --frozen --all-extras
+      - name: Run benchmark
+        run: >-
+          uv run veilmark benchmark
+          --profile ${{ inputs.profile }} --split ${{ inputs.split }} --media ${{ inputs.media }}
+          --out bench-results
+      - name: Summary
+        if: always()
+        run: test -f bench-results/report.md && cat bench-results/report.md >> "$GITHUB_STEP_SUMMARY" || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: benchmark-${{ inputs.profile }}-${{ inputs.split }}-${{ inputs.media }}
+          path: bench-results
