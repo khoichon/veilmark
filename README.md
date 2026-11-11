@@ -119,10 +119,11 @@ python scripts/build_webapp.py [--vendor-pyodide]   # -> dist/web (static files)
 python -m http.server -d dist/web 8000              # or upload dist/web to any static host
 ```
 
-Create keys in the browser or open a keyfile, watermark and verify images with live
-progress bars; nothing is uploaded anywhere. Keyfiles are passphrase-encrypted and
-interchangeable with the CLI (`veilmark keys export-keyfile` / `import-keyfile`).
-Images only. Details: [docs/webapp.md](docs/webapp.md).
+Create keys in the browser or open a keyfile, watermark and verify images and video
+(decoded and encoded by the browser's WebCodecs) with live progress bars; nothing is
+uploaded anywhere. Keyfiles are passphrase-encrypted and interchangeable with the CLI
+(`veilmark keys export-keyfile` / `import-keyfile`).
+Video up to 1080p and 10 minutes. Details: [docs/webapp.md](docs/webapp.md).
 
 ## Web helper
 
@@ -225,7 +226,7 @@ benchmarks/results/                 committed benchmark reports
 | Image embed/detect, signed payloads, trust lists, rotation/revocation | implemented, tested |
 | Video embed/detect (moving distribution, temporal accumulation, moving-crop tracking) | implemented, tested |
 | CLI, GUI, web helper, plugins (in-process, approval + hash pinning) | implemented, tested |
-| Static browser app (images; keyfiles; progress) | implemented; bridge tested under CPython, full path checked in headless Chromium |
+| Static browser app (images and video; keyfiles; progress) | implemented; bridge tested under CPython, full path checked in headless Chromium |
 | Benchmark laboratory (images and video, dev/held-out, CIs, FP rates, forgery checks) | implemented, results committed |
 | Perspective / non-uniform scaling robustness | **experimental** (mild only) |
 | Payload encryption, isolated (out-of-process) plugins, key registries | **not implemented** |

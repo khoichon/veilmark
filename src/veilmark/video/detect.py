@@ -22,6 +22,7 @@ from __future__ import annotations
 import itertools
 import math
 import time
+from collections.abc import Callable, Generator, Iterable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -278,6 +279,59 @@ def _fold_index(h: int, w: int, basis: np.ndarray) -> tuple[np.ndarray, np.ndarr
     return idx, np.maximum(count, 1.0)
 
 
+@dataclass(frozen=True)
+class FrameRequest:
+    """Luma frames the detector wants next, in presentation order: ``run_length``
+    consecutive frames out of every ``stride`` (frame ``n`` is wanted when
+    ``n % stride < run_length``), at most ``max_frames`` of them."""
+
+    stride: int
+    max_frames: int
+    run_length: int = 1
+
+    def wants(self, n: int) -> bool:
+        return n % self.stride < max(1, min(self.run_length, self.stride))
+
+    def to_dict(self) -> dict[str, int]:
+        return {"stride": self.stride, "max_frames": self.max_frames, "run_length": self.run_length}
+
+
+# A detection run as a generator: it yields a FrameRequest, then receives the wanted
+# frames one per ``send`` (2-D uint8 luma arrays) and ``None`` once they are exhausted,
+# and finally returns the report. Any decoder can drive it: ffmpeg here, WebCodecs in
+# the web app (webapp/bridge.py).
+DetectSteps = Generator[FrameRequest | None, np.ndarray | None, report_mod.DetectionReport]
+
+
+def _receive(
+    req: FrameRequest, sink: Callable[[np.ndarray], None]
+) -> Generator[FrameRequest | None, np.ndarray | None, int]:
+    frame = yield req
+    n = 0
+    while frame is not None:
+        if n < req.max_frames:
+            sink(frame)
+            n += 1
+        frame = yield None
+    return n
+
+
+def drive(
+    steps: DetectSteps, frames: Callable[[FrameRequest], Iterable[np.ndarray]]
+) -> report_mod.DetectionReport:
+    """Run detection steps, answering each request with frames from ``frames(req)``."""
+    try:
+        req = next(steps)
+        while True:
+            assert req is not None
+            for f in frames(req):
+                if steps.send(f) is not None:
+                    raise RuntimeError("detector asked for frames before the previous request ended")
+            req = steps.send(None)
+    except StopIteration as stop:
+        return stop.value
+
+
 def detect_video(
     vm: Veilmark,
     path: Path,
@@ -286,17 +340,39 @@ def detect_video(
     stride: int | None = None,
     reporter: Reporter | None = None,
 ) -> report_mod.DetectionReport:
-    rep = reporter or Reporter()
-    t0 = time.perf_counter()
     path = check_input_file(Path(path), vm.limits)
     info = ffmpeg.probe(path)
+
+    def frames(req: FrameRequest) -> Iterable[np.ndarray]:
+        return ffmpeg.FrameReader(
+            info, "gray", stride=req.stride, max_frames=req.max_frames, run_length=req.run_length
+        )
+
+    return drive(detect_steps(vm, info, str(path), pattern_key, max_frames, stride, reporter), frames)
+
+
+def detect_steps(
+    vm: Veilmark,
+    info: ffmpeg.VideoInfo,
+    source: str,
+    pattern_key: str | None = None,
+    max_frames: int = 900,
+    stride: int | None = None,
+    reporter: Reporter | None = None,
+) -> DetectSteps:
+    """Detection independent of the decoder (see DetectSteps). ``info`` describes the
+    frames that will be supplied (their width and height, frame rate and count)."""
+    rep = reporter or Reporter()
+    t0 = time.perf_counter()
     # Stored keys first; public keys only if nothing was found (see Veilmark.keyring_tiers).
     tiers = vm.keyring_tiers(pattern_key)
     first: report_mod.DetectionReport | None = None
     searched = 0
     for i, (keyring, kids) in enumerate(tiers):
         sub = rep.sub(i / len(tiers), (i + 1) / len(tiers))
-        r, n = _detect_video_with(vm, path, info, keyring, kids, max_frames, stride, sub, searched)
+        r, n = yield from _detect_video_with(
+            vm, source, info, keyring, kids, max_frames, stride, sub, searched
+        )
         searched += n
         if r.detected:
             break
@@ -310,7 +386,7 @@ def detect_video(
 
 def _detect_video_with(
     vm: Veilmark,
-    path: Path,
+    source: str,
     info: ffmpeg.VideoInfo,
     keyring: list[KeyedPatterns],
     kids: list[str],
@@ -318,7 +394,7 @@ def _detect_video_with(
     stride: int | None,
     rep: Reporter,
     searched_before: int,
-) -> tuple[report_mod.DetectionReport, int]:
+) -> Generator[FrameRequest | None, np.ndarray | None, tuple[report_mod.DetectionReport, int]]:
     """One detection pass over the video with one set of keys."""
     t0 = time.perf_counter()
     total = info.frames or int(max(1.0, info.duration) * float(info.fps))
@@ -326,19 +402,17 @@ def _detect_video_with(
         stride = max(1, math.ceil(total / max(1, max_frames)))
     rep(0.02, "geometry pass")
     g_stride = max(GROUP_LEN, total // GEOMETRY_GROUPS)
-    gframes = [
-        f.copy()
-        for f in ffmpeg.FrameReader(
-            info, "gray", stride=g_stride, max_frames=GEOMETRY_GROUPS * GROUP_LEN, run_length=GROUP_LEN
-        )
-    ]
+    gframes: list[np.ndarray] = []
+    yield from _receive(
+        FrameRequest(g_stride, GEOMETRY_GROUPS * GROUP_LEN, GROUP_LEN), lambda f: gframes.append(f.copy())
+    )
     if not gframes:
         raise InputError("no frames could be decoded from the video")
     geo = _geometry(gframes, keyring, rep.sub(0.02, 0.25))
-    del gframes
+    gframes.clear()
     diag: dict[str, object] = {"video": info.summary(), "stride": stride}
     if geo is None:
-        r = report_mod.interpret(str(path), "video", 0.0, 1, None, vm.trust, vm.own_public_keys(), kids)
+        r = report_mod.interpret(source, "video", 0.0, 1, None, vm.trust, vm.own_public_keys(), kids)
         r.notes.append("no plausible watermark geometry found")
         r.diagnostics.update(diag)
         return r, 0
@@ -352,12 +426,16 @@ def _detect_video_with(
     tiles: list[np.ndarray] = []
     frame_numbers: list[int] = []
     n_expected = max(1, min(max_frames, math.ceil(total / stride)))
-    for i, frame in enumerate(ffmpeg.FrameReader(info, "gray", stride=stride, max_frames=max_frames)):
+
+    def fold(frame: np.ndarray) -> None:
+        i = len(tiles)
         rep(0.25 + 0.6 * min(1.0, i / n_expected), f"frame {i * stride + 1}/{total}")
         prepared = geometry.prepare_for_folding(frame, chip_px)
         t = np.bincount(idx, weights=prepared.ravel(), minlength=P0 * P0) / count
         tiles.append(engine.normalise_tile(t.reshape(P0, P0)).astype(np.float16))
         frame_numbers.append(i * stride)
+
+    yield from _receive(FrameRequest(stride, max_frames), fold)
     if not tiles:
         raise InputError("no frames could be decoded from the video")
 
@@ -419,7 +497,7 @@ def _detect_video_with(
 
     searched = (len(keyring) * 15) * NUM_VARIANTS * 8 * P0 * P0 * 2
     r = report_mod.interpret(
-        str(path), "video", sync_z, searched_before + searched, outcome, vm.trust, vm.own_public_keys(), kids
+        source, "video", sync_z, searched_before + searched, outcome, vm.trust, vm.own_public_keys(), kids
     )
     r.geometry = lat.describe()
     seg_changes = sum(1 for a, b in itertools.pairwise(timeline) if a[1] != b[1])

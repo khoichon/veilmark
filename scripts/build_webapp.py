@@ -27,9 +27,12 @@ PYODIDE_VERSION = "314.0.7"
 CDN = f"https://cdn.jsdelivr.net/pyodide/v{PYODIDE_VERSION}/full/"
 CORE_FILES = ["pyodide.mjs", "pyodide.asm.mjs", "pyodide.asm.wasm", "python_stdlib.zip", "pyodide-lock.json"]
 PACKAGES = ["numpy", "opencv-python", "pillow", "pynacl", "cffi", "pycparser"]
-# Engine modules the browser does not need (desktop GUI, CLI, video, benchmarks, plugins, web helper).
-EXCLUDE = {"app", "benchmarks", "cli", "web", "video", "plugins"}
-STATIC = ["index.html", "style.css", "app.js", "worker.js", "bridge.py"]
+# Engine modules the browser does not need (desktop GUI, CLI, benchmarks, plugins, web helper).
+EXCLUDE = {"app", "benchmarks", "cli", "web", "plugins"}
+# Video decoding/encoding in the browser (WebCodecs): Mediabunny, MPL-2.0, unmodified. The
+# version is in the file name, so it never needs a cache-busting stamp.
+VENDOR = ["vendor/mediabunny-1.65.2.min.mjs", "vendor/mediabunny-LICENSE.txt"]
+STATIC = ["index.html", "style.css", "app.js", "worker.js", "bridge.py", *VENDOR]
 # Asset references stamped with a build version, so browsers never mix cached files from
 # different deploys (static hosts cache .js longer than .html). (file, reference)
 VERSIONED = [
@@ -104,6 +107,7 @@ def main() -> int:
     if out.exists():
         shutil.rmtree(out)
     out.mkdir(parents=True)
+    (out / "vendor").mkdir()
     for name in STATIC:
         shutil.copy2(ROOT / "webapp" / name, out / name)
     size = build_zip(out / "veilmark.zip")

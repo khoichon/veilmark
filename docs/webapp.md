@@ -1,9 +1,10 @@
 # Veilmark Web (static, client-side)
 
-A static website that watermarks and verifies **images** entirely inside the visitor's
-browser. There is no server-side code: the same Python engine runs on
-[Pyodide](https://pyodide.org) (CPython compiled to WebAssembly) inside a Web Worker.
-Images, keys and passphrases never leave the browser tab.
+A static website that watermarks and verifies **images and video** entirely inside the
+visitor's browser. There is no server-side code: the same Python engine runs on
+[Pyodide](https://pyodide.org) (CPython compiled to WebAssembly) inside a Web Worker, and
+video is decoded and encoded by the browser's own codecs (WebCodecs).
+Media, keys and passphrases never leave the browser tab.
 
 ## Build and host
 
@@ -28,11 +29,11 @@ downloaded wheel against the SHA-256 in Pyodide's lock file.
    in the tab until saved. *Save keyfile* downloads a passphrase-encrypted file and can
    also keep an **encrypted** copy in this browser's storage (unlocked with the
    passphrase on the next visit). The page warns before closing with unsaved keys.
-2. **Watermark an image**: drop an image, type the hidden text (≤ 60 bytes), choose a
-   strength and output format. A read-back check (on by default) decodes the written
-   file before offering it for download. Press and hold the result to compare with the
-   original; click to view at 100%.
-3. **Detect & verify**: drop any copy. Detect is available once any pattern key is
+2. **Watermark an image or video**: drop a file, type the hidden text (≤ 60 bytes), choose a
+   strength (and, for images, an output format). A read-back check (on by default) decodes
+   the written file before offering it for download. For images, press and hold the result
+   to compare with the original; click to view at 100%.
+3. **Detect & verify**: drop any copy (image or video). Detect is available once any pattern key is
    loaded or any issuer is trusted (for publicly verifiable watermarks); otherwise a hint
    says what to add. Detection, signature and issuer trust are shown
    as three separate results.
@@ -44,6 +45,32 @@ If the engine cannot start, the panel says why and offers a reload.
 Every long step shows a progress bar with moving stripes, a status line and elapsed
 seconds, plus **Cancel** (which restarts the engine; loaded keys are restored from an
 in-memory encrypted copy).
+
+## Video
+
+Video uses the same engine as `veilmark embed` / `veilmark detect` on the desktop (moving
+watermark schedule, temporal evidence accumulation), with the frames supplied by the browser
+instead of ffmpeg:
+
+* Decoding and encoding use WebCodecs through [Mediabunny](https://mediabunny.dev)
+  (MPL-2.0, served unmodified from `vendor/`). Python receives each frame's luma plane and
+  returns the watermarked plane; chroma is passed through.
+* The output keeps the input's container (MP4, MOV, WebM or MKV) and is re-encoded with the
+  first codec the browser can encode for it (H.264 for MP4/MOV where available, else VP9 or
+  AV1) at Mediabunny's "very high" quality. Audio is copied when the container allows it;
+  if the browser can neither copy nor re-encode a track, the result says it was dropped.
+* Detection analyses up to 300 frames spread over the clip (the CLI analyses up to 900), so
+  it is somewhat less sensitive on long, heavily degraded clips.
+* Limits: up to 1080p and 10 minutes. Frames are processed one at a time, so memory stays
+  bounded, but the encoded output is held in memory until downloaded.
+* Speed (headless Chromium on the development machine): a 4-second 640×360 clip took
+  162 s to watermark, almost all of it in the check for an existing watermark and the
+  read-back check (each searches your own keys, then the public ones); the frame-by-frame
+  embedding itself took a few seconds. Detecting it with only the issuer's public key took
+  40 s. Untick the read-back check to roughly halve the time.
+* Needs a browser with WebCodecs (current Chrome, Edge, Safari and Firefox). Which codecs
+  can be decoded and encoded depends on the browser and operating system; the page says
+  when one is missing.
 
 ## Keyfiles
 
@@ -89,8 +116,7 @@ For private watermarks:
 
 ## Limits and performance
 
-* Images only (PNG, JPEG, WebP; up to 40 MP and 200 MB). Video stays in the CLI and
-  desktop app: decoding video in WebAssembly is slow and memory-bound.
+* Images: PNG, JPEG, WebP; up to 40 MP and 200 MB. Video: see [Video](#video).
 * Speed: the engine runs single-threaded in WebAssembly. Measured under Node.js with
   Pyodide on the development machine (which was heavily loaded at the time, so treat
   these as rough): first visit downloads ~30 MB and starts in a few seconds once
@@ -105,6 +131,7 @@ For private watermarks:
 ## Tests
 
 `tests/end_to_end/test_webapp.py` runs the bridge (`webapp/bridge.py`) under CPython,
-including a two-person verification flow and the static build. The full browser path
-(worker, Pyodide, UI, keyfile save, progress) was exercised in headless Chromium
-(QtWebEngine) during development; that script is not part of the automated suite.
+including a two-person verification flow, the frame-by-frame video protocol (with ffmpeg
+standing in for WebCodecs) and the static build. The full browser path (worker, Pyodide,
+WebCodecs, UI, keyfile save, progress) was exercised in headless Chromium (QtWebEngine)
+during development; that script is not part of the automated suite.

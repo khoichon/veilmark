@@ -13,10 +13,13 @@ import io
 import os
 import shutil
 import tempfile
+import time
 from collections.abc import Callable
+from fractions import Fraction
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 from PIL import Image
 
 from veilmark.api import Veilmark, WatermarkSpec, parse_strength
@@ -24,9 +27,17 @@ from veilmark.core.tasks import CancelToken, Reporter
 from veilmark.crypto import keyfile, keys
 from veilmark.image import io as image_io
 from veilmark.security.limits import InputError, Limits
+from veilmark.video import detect as vdetect
+from veilmark.video import embed as vembed
+from veilmark.video.ffmpeg import VideoInfo
 
 # Browser memory is limited: refuse very large images up front.
 BROWSER_LIMITS = Limits(max_image_pixels=40_000_000, max_file_bytes=200 * 1024**2)
+# Video runs single-threaded in WebAssembly (roughly 5-15 frames per second at 720p):
+# keep jobs to a length a browser tab can finish.
+BROWSER_VIDEO_SECONDS = 600.0
+BROWSER_VIDEO_PIXELS = 1920 * 1088
+WEB_DETECT_FRAMES = 300  # frames analysed when detecting (the CLI uses up to 900)
 FORMATS = {"png": "PNG", "jpg": "JPEG", "jpeg": "JPEG", "webp": "WEBP"}
 
 _home = Path(tempfile.mkdtemp(prefix="veilmark-web-"))
@@ -246,3 +257,194 @@ def detect(
     img = _load(_as_bytes(data), name)
     r = _vm.detect_image_data(img, name or "image", reporter=rep.sub(0.05, 1.0), deep=bool(thorough))
     return r.to_dict()
+
+
+# ------------------------------------------------------------------ video
+#
+# The worker decodes and encodes video with the browser's WebCodecs (Mediabunny) and
+# hands luma planes to these functions one frame at a time. Detection is a sequence of
+# frame requests (see veilmark.video.detect.DetectSteps):
+#
+#   req = video_*_begin(...)                  # {"stride", "max_frames", "run_length"}
+#   loop: for each wanted frame: video_frame(y)
+#         r = video_frames_end()              # {"request": ...} again, or {"report": ...}
+#
+# Embedding: video_embed_begin (returns the request of the check for an existing
+# watermark, or None), video_embed_start, video_embed_frame per frame,
+# video_embed_finish, then optionally video_self_check_begin for the read-back check.
+
+_job: dict[str, Any] = {}
+
+
+def _video_info(meta: Any) -> VideoInfo:
+    m = meta.to_py() if hasattr(meta, "to_py") else dict(meta)
+    w, h = int(m["width"]), int(m["height"])
+    fps = Fraction(float(m.get("fps") or 30.0)).limit_denominator(1001)
+    duration = float(m.get("duration") or 0.0)
+    if duration > BROWSER_VIDEO_SECONDS:
+        raise InputError(f"video too long for the browser version ({BROWSER_VIDEO_SECONDS / 60:.0f} min max)")
+    if w * h > BROWSER_VIDEO_PIXELS:
+        raise InputError("video frame too large for the browser version (1080p max)")
+    frames = m.get("frames")
+    return VideoInfo(
+        path=Path(str(m.get("name") or "video")),
+        width=w,
+        height=h,
+        fps=fps,
+        duration=duration,
+        frames=int(frames) if frames else None,
+        codec=str(m.get("codec") or "?"),
+        pix_fmt="yuv420p",
+        rotation=int(m.get("rotation") or 0),
+        has_audio=bool(m.get("audio_codecs")),
+        audio_codecs=[str(c) for c in (m.get("audio_codecs") or [])],
+        bit_rate=None,
+        variable_frame_rate=False,
+    )
+
+
+def _luma(data: Any, info: VideoInfo) -> np.ndarray:
+    buf = _as_bytes(data)
+    if len(buf) != info.width * info.height:
+        raise InputError("frame size changed mid-video")
+    return np.frombuffer(buf, dtype=np.uint8).reshape(info.height, info.width)
+
+
+def _start_steps(steps: vdetect.DetectSteps) -> dict[str, int]:
+    _job["steps"] = steps
+    req = next(steps)
+    assert req is not None
+    return req.to_dict()
+
+
+def video_frame(data: Any) -> None:
+    """One wanted frame (luma bytes, width x height) for the running detection."""
+    if _job["steps"].send(_luma(data, _job["info"])) is not None:
+        raise RuntimeError("detector out of step")
+
+
+def video_frames_end() -> dict[str, Any]:
+    """All wanted frames were sent: the next request, or the finished report."""
+    try:
+        req = _job["steps"].send(None)
+        return {"request": req.to_dict()}
+    except StopIteration as stop:
+        _job["report"] = stop.value
+        return {"report": stop.value.to_dict()}
+
+
+def video_detect_begin(
+    meta: Any, progress: Callable[[float, str], Any] | None = None, max_frames: int = WEB_DETECT_FRAMES
+) -> dict[str, int]:
+    if not _vm.detection_pattern_keys():
+        raise InputError(
+            "add the issuer's public key (enough for publicly verifiable watermarks) or their "
+            "pattern key, or load your own keys"
+        )
+    _job.clear()
+    info = _job["info"] = _video_info(meta)
+    rep = _reporter(progress)
+    return _start_steps(vdetect.detect_steps(_vm, info, info.path.name, None, int(max_frames), None, rep))
+
+
+def video_embed_begin(
+    meta: Any,
+    text: str,
+    strength: str,
+    mode: str = "robust",
+    public: bool = False,
+    allow_rewatermark: bool = False,
+    self_check: bool = True,
+    progress: Callable[[float, str], Any] | None = None,
+) -> dict[str, int] | None:
+    """Validate and prepare; returns the frame request of the existing-watermark check
+    (finish it with video_frame / video_frames_end before video_embed_start)."""
+    if not status()["has_keys"]:
+        raise InputError("generate or load keys first")
+    _job.clear()
+    info = _job["info"] = _video_info(meta)
+    if min(info.width, info.height) < 128:
+        raise InputError("video too small to watermark (minimum 128 px on the short side)")
+    if mode not in ("robust", "light"):
+        raise InputError(f"unknown video mode {mode!r}")
+    spec = WatermarkSpec(
+        text=text or None,
+        sign=True,
+        strength=parse_strength(strength),
+        allow_rewatermark=bool(allow_rewatermark),
+        public=bool(public),
+    )
+    rep = _reporter(progress)
+    # Progress: existing-watermark check, embedding, read-back check.
+    split = (0.12, 0.6) if self_check else (0.12, 1.0)
+    _job.update(spec=spec, mode=mode, rep=rep, split=split, t0=time.perf_counter(), notes=[])
+    return _start_steps(
+        vdetect.detect_steps(
+            _vm, info, info.path.name, None, vembed.EXISTING_CHECK_FRAMES, None, rep.sub(0.0, split[0])
+        )
+    )
+
+
+def video_embed_start() -> dict[str, Any]:
+    """After the existing-watermark check: refuse, or set up the frame embedder."""
+    info: VideoInfo = _job["info"]
+    avoid = vembed.existing_watermark(_job["spec"], _job.pop("report"), _job["notes"])
+    _job["embedder"] = vembed.FrameEmbedder(
+        _vm, _job["spec"], info.width, info.height, float(info.fps), _job["mode"], avoid
+    )
+    return {"watermark_id": _job["embedder"].wid.hex()}
+
+
+def video_embed_frame(data: Any) -> bytes:
+    """Watermark one frame's luma plane (in presentation order); returns the new plane."""
+    info: VideoInfo = _job["info"]
+    fe: vembed.FrameEmbedder = _job["embedder"]
+    lo, hi = _job["split"]
+    total = info.frames or max(1, round(info.duration * float(info.fps)))
+    _job["rep"](lo + (hi - lo) * min(0.99, fe.frames / total), f"frame {fe.frames + 1}/{total}")
+    return fe.luma(_luma(data, info)).tobytes()
+
+
+def video_embed_finish(output_name: str, size: int, notes: Any = None) -> dict[str, Any]:
+    fe: vembed.FrameEmbedder = _job["embedder"]
+    if fe.frames == 0:
+        raise InputError("no frames could be decoded from the video")
+    extra_notes = [str(n) for n in (notes.to_py() if hasattr(notes, "to_py") else notes or [])]
+    res = fe.result(output_name, int(size), time.perf_counter() - _job["t0"], _job["notes"] + extra_notes)
+    info: VideoInfo = _job["info"]
+    res.extra["source"] = info.summary()
+    _job["result"] = res
+    return _video_result(res)
+
+
+def _video_result(res: Any) -> dict[str, Any]:
+    info: VideoInfo = _job["info"]
+    d: dict[str, Any] = res.to_dict()
+    d["output_name"] = res.output
+    d["size"] = [info.width, info.height]
+    return d
+
+
+def video_self_check_begin(meta: Any) -> dict[str, int]:
+    """Read-back check of the encoded output (same request protocol as detection)."""
+    info = _job["info"] = _video_info(meta)
+    lo = _job["split"][1]
+    return _start_steps(
+        vdetect.detect_steps(
+            _vm, info, "self-check", None, WEB_DETECT_FRAMES, None, _job["rep"].sub(lo, 0.99)
+        )
+    )
+
+
+def video_self_check_result() -> dict[str, Any]:
+    res = _job["result"]
+    check = _job.pop("report")
+    ok = check.payload_recovered_for(res.watermark_id)
+    res.extra["self_check"] = {"status": check.status, "payload_recoverable": ok}
+    if not ok:
+        res.notes.append(
+            f"SELF-CHECK FAILED ({check.status}): the payload cannot be recovered from the encoded "
+            "output. The video may be too short, small or flat, or the browser's encoder too lossy; "
+            "use a shorter text, the 'robust' strength or the desktop app."
+        )
+    return _video_result(res)

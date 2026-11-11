@@ -323,16 +323,22 @@ function wireDrop(dropId, inputId, onFile) {
   d.ondrop = (e) => { e.preventDefault(); d.classList.remove("over"); e.dataTransfer.files[0] && onFile(e.dataTransfer.files[0], d); };
 }
 
+const isVideo = (f) => f.type.startsWith("video/") || /\.(mp4|m4v|mov|webm|mkv)$/i.test(f.name);
+
 function showFile(d, f) {
   const url = URL.createObjectURL(f);
-  d.innerHTML = `<img alt="" src="${url}"><small>${esc(f.name)} · ${(f.size / 1e6).toFixed(1)} MB</small>`;
+  const media = isVideo(f) ? `<video muted playsinline preload="metadata" src="${url}"></video>` : `<img alt="" src="${url}">`;
+  d.innerHTML = `${media}<small>${esc(f.name)} · ${(f.size / 1e6).toFixed(1)} MB</small>`;
 }
 
 wireDrop("wm-drop", "wm-file", (f, d) => {
   wmFile = f; showFile(d, f); $("wm-out").innerHTML = "";
+  $("wm-format-box").hidden = isVideo(f); $("wm-video-note").hidden = !isVideo(f);
   $("wm-rewm").checked = false; $("wm-rewm-row").hidden = true; render(state);
 });
-wireDrop("dt-drop", "dt-file", (f, d) => { dtFile = f; showFile(d, f); $("dt-out").innerHTML = ""; render(state); });
+wireDrop("dt-drop", "dt-file", (f, d) => {
+  dtFile = f; showFile(d, f); $("dt-out").innerHTML = ""; $("dt-thorough-row").hidden = isVideo(f); render(state);
+});
 $("wm-text").oninput = () => ($("wm-count").textContent = `${new TextEncoder().encode($("wm-text").value).length} / 60`);
 
 // ------------------------------------------------------------------- jobs
@@ -358,6 +364,7 @@ $("wm-go").onclick = async () => {
   btn.disabled = true; out.innerHTML = "";
   const j = job("wm");
   try {
+    if (isVideo(wmFile)) { await watermarkVideo(out, j); return; }
     const data = await wmFile.arrayBuffer();
     const fmt = $("wm-format").value;
     const r = await call("embed", {
@@ -369,9 +376,7 @@ $("wm-go").onclick = async () => {
     const blob = new Blob([r.output], { type: res.mime });
     const outUrl = URL.createObjectURL(blob);
     const origUrl = URL.createObjectURL(wmFile);
-    const sc = res.extra.self_check;
-    const check = !sc ? "" : sc.payload_recoverable
-      ? `<span class="pill ok">read-back check passed</span>` : `<span class="pill bad">read-back check FAILED</span>`;
+    const check = checkPill(res.extra.self_check);
     out.innerHTML = `
       <div class="row wrap">${check}<span class="small-text">PSNR ${esc(res.psnr_db)} dB · SSIM ${esc(res.ssim)} · ${esc(res.payload_bytes)}-byte signed payload</span></div>
       <div class="compare" id="cmp" title="Press and hold to see the original · click to zoom to 100%">
@@ -394,6 +399,25 @@ $("wm-go").onclick = async () => {
   }
 };
 
+const checkPill = (sc) => !sc ? "" : sc.payload_recoverable
+  ? `<span class="pill ok">read-back check passed</span>` : `<span class="pill bad">read-back check FAILED</span>`;
+
+async function watermarkVideo(out, j) {
+  const r = await call("video_embed", {
+    file: wmFile, text: $("wm-text").value, strength: $("wm-strength").value, mode: "robust",
+    self_check: $("wm-selfcheck").checked, allow_rewatermark: $("wm-rewm").checked, public: $("wm-public").checked,
+  }, j.progress);
+  const res = r.result;
+  const url = URL.createObjectURL(new Blob([r.output], { type: res.mime }));
+  const x = res.extra || {};
+  out.innerHTML = `
+    <div class="row wrap">${checkPill(x.self_check)}<span class="small-text">${esc(x.frames)} frames · luma PSNR ${esc(res.psnr_db)} dB (before encoding) · ${esc(res.payload_bytes)}-byte signed payload · ${(res.bytes_written / 1e6).toFixed(1)} MB</span></div>
+    <video class="result" controls playsinline src="${url}"></video>
+    ${(res.notes || []).map((n) => `<p class="${n.startsWith("SELF-CHECK") ? "err" : "small-text"}">${esc(n)}</p>`).join("")}
+    <p class="small-text">Watermark id <span class="mono">${esc(res.watermark_id)}</span></p>
+    <a class="download" href="${url}" download="${esc(res.output_name)}"><button class="primary">Download ${esc(res.output_name)}</button></a>`;
+}
+
 const ST = { "payload-recovered": ["Watermark found", "ok"], "id-only": ["Watermark id only", "warn"],
   "signal-only": ["Signal found, text unreadable", "warn"], "not-detected": ["No watermark found", "na"] };
 const SIG = { valid: ["valid", "ok"], invalid: ["INVALID: altered or forged", "bad"], unsigned: ["unsigned", "warn"],
@@ -407,8 +431,13 @@ $("dt-go").onclick = async () => {
   btn.disabled = true; out.innerHTML = "";
   const j = job("dt");
   try {
-    const data = await dtFile.arrayBuffer();
-    const r = await call("detect", { data, name: dtFile.name, thorough: $("dt-thorough").checked }, j.progress, [data]);
+    let r;
+    if (isVideo(dtFile)) {
+      r = await call("video_detect", { file: dtFile }, j.progress);
+    } else {
+      const data = await dtFile.arrayBuffer();
+      r = await call("detect", { data, name: dtFile.name, thorough: $("dt-thorough").checked }, j.progress, [data]);
+    }
     const v = r.verification;
     let h = `<div class="verdict"><div class="line"><span class="k">Detection</span>${pill(ST[r.status] || [r.status, "na"])}</div>`;
     if (v) {
@@ -436,6 +465,8 @@ $("dt-go").onclick = async () => {
       h += `<p class="small-text">If the issuer made a private (not publicly verifiable) watermark, you also need their pattern key.</p>`;
     }
     h += `<p class="small-text">Evidence: sync z = ${esc(r.confidence.sync_z)} (threshold ${esc(r.confidence.sync_present_threshold)})</p>`;
+    const dg = r.diagnostics || {};
+    if (dg.frames_analysed) h += `<p class="small-text">Video: ${esc(dg.frames_analysed)} frames analysed, ${esc(dg.frames_with_evidence ?? 0)} with usable evidence.</p>`;
     for (const n of r.notes || []) h += `<p class="small-text">${esc(n)}</p>`;
     out.innerHTML = h;
   } catch (e) {

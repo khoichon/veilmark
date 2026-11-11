@@ -24,7 +24,7 @@
 <header class="top" inert>
   <div>
     <h1>Veilmark <span class="tag">web</span></h1>
-    <p class="sub">Invisible, signed image watermarks. Everything runs in this browser tab: your images and keys never leave your computer.</p>
+    <p class="sub">Invisible, signed watermarks for images and video. Everything runs in this browser tab: your images and keys never leave your computer.</p>
   </div>
   <div class="engine" id="engine-msg"></div>
 </header>
@@ -81,12 +81,12 @@
 
   <!-- ============================ WATERMARK ============================ -->
   <section class="card" id="wm-card" aria-labelledby="wm-h">
-    <h2 id="wm-h"><span class="step">2</span> Watermark an image</h2>
-    <div class="drop" id="wm-drop" tabindex="0" role="button" aria-label="Choose an image to watermark">
-      <span>Drop an image here or <u>choose a file</u></span>
-      <small>PNG, JPEG or WebP · up to 40 megapixels</small>
+    <h2 id="wm-h"><span class="step">2</span> Watermark an image or video</h2>
+    <div class="drop" id="wm-drop" tabindex="0" role="button" aria-label="Choose an image or video to watermark">
+      <span>Drop an image or video here or <u>choose a file</u></span>
+      <small>PNG, JPEG or WebP up to 40 megapixels · MP4, MOV, WebM or MKV up to 1080p and 10 minutes</small>
     </div>
-    <input type="file" id="wm-file" accept="image/png,image/jpeg,image/webp" hidden>
+    <input type="file" id="wm-file" accept="image/png,image/jpeg,image/webp,video/*,.mkv,.mov" hidden>
     <label for="wm-text">Hidden text <span class="hint" id="wm-count">0 / 60</span></label>
     <input id="wm-text" maxlength="60" placeholder="© Studio North 2026" autocomplete="off">
     <div class="row cols">
@@ -98,7 +98,7 @@
           <option value="robust">Robust (more visible)</option>
         </select>
       </div>
-      <div>
+      <div id="wm-format-box">
         <label for="wm-format">Save as</label>
         <select id="wm-format">
           <option value="same">Same as input</option>
@@ -108,6 +108,9 @@
         </select>
       </div>
     </div>
+    <p class="small-text" id="wm-video-note" hidden>Video is processed frame by frame in this tab and re-encoded by the browser in
+      the same container; audio is copied when the browser can. Expect minutes rather than seconds: the checks for an existing
+      watermark and the read-back check take the longest.</p>
     <label class="check"><input type="checkbox" id="wm-selfcheck" checked> Check the result can be read back (slower, recommended)</label>
     <label class="check"><input type="checkbox" id="wm-public"> Publicly verifiable: anyone with my public key can verify it</label>
     <p class="warn" id="wm-public-note" hidden>Verifiers won't need your secret pattern key, only your public key. Anyone who has your
@@ -124,12 +127,12 @@
   <!-- ============================== DETECT ============================= -->
   <section class="card" id="dt-card" aria-labelledby="dt-h">
     <h2 id="dt-h"><span class="step">3</span> Detect &amp; verify</h2>
-    <div class="drop" id="dt-drop" tabindex="0" role="button" aria-label="Choose an image to check">
-      <span>Drop an image to check or <u>choose a file</u></span>
+    <div class="drop" id="dt-drop" tabindex="0" role="button" aria-label="Choose an image or video to check">
+      <span>Drop an image or video to check or <u>choose a file</u></span>
       <small>Cropped, resized, recompressed or recoloured copies are fine</small>
     </div>
-    <input type="file" id="dt-file" accept="image/*" hidden>
-    <label class="check"><input type="checkbox" id="dt-thorough" checked> Thorough search if nothing is found at first (slower)</label>
+    <input type="file" id="dt-file" accept="image/*,video/*,.mkv,.mov" hidden>
+    <label class="check" id="dt-thorough-row"><input type="checkbox" id="dt-thorough" checked> Thorough search if nothing is found at first (slower)</label>
     <button class="primary wide" id="dt-go" disabled>Detect</button>
     <p class="small-text" id="dt-hint" hidden>To detect, add the issuer's <b>public key</b> under <i>Trusted issuers &amp; shared pattern
       keys</i> (enough for publicly verifiable watermarks) or their <b>pattern key</b>, or load your own keys.</p>

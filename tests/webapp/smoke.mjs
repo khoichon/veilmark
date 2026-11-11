@@ -53,3 +53,43 @@ try { b.embed(res.output, "again.jpg", "x", "balanced", "png", 92, true, false);
 if (!refused) fail("re-watermark was not refused");
 if (J(b.detect(png, "orig.png", false, () => {})).status !== "not-detected") fail("false positive");
 console.log(`OK: embed + self-check + detect + re-watermark refusal in ${(Date.now() - t0) / 1000}s`);
+
+// Video: the frame-by-frame protocol worker.js drives (WebCodecs is not available here,
+// so the luma planes are synthesised: textured content panning slowly).
+const t1 = Date.now();
+const W = 480, H = 352, N = 60;
+const meta = { name: "ci.webm", width: W, height: H, fps: 30, duration: N / 30, frames: N, codec: "vp9", audio_codecs: [] };
+await py.runPythonAsync(`
+import numpy as np, cv2
+rng = np.random.default_rng(5)
+base = cv2.resize(rng.integers(0, 255, (60, 80)).astype(np.uint8), (${W} + ${N}, ${H}), interpolation=cv2.INTER_CUBIC)
+base = np.clip(base + rng.normal(0, 8, base.shape), 0, 255).astype(np.uint8)
+ci_frames = [np.ascontiguousarray(base[:, i:i + ${W}]) for i in range(${N})]
+`);
+const original = [];
+for (let i = 0; i < N; i++) original.push(J(py.runPython(`ci_frames[${i}].tobytes()`)));
+const answer = (req, frames) => {
+  for (;;) {
+    let taken = 0;
+    for (let n = 0; n < frames.length && taken < req.max_frames; n++) {
+      if (n % req.stride < Math.max(1, Math.min(req.run_length, req.stride))) { b.video_frame(frames[n]); taken++; }
+    }
+    const r = J(b.video_frames_end());
+    if (r.report) return r.report;
+    req = r.request;
+  }
+};
+let vticks = 0;
+const check = answer(J(b.video_embed_begin(meta, "wasm video", "robust", "robust", false, false, true, () => vticks++)), original);
+if (check.status !== "not-detected") fail(`video existing-watermark check: ${check.status}`);
+const wid = J(b.video_embed_start()).watermark_id;
+const marked = original.map((y) => { const o = b.video_embed_frame(y); const a = o.toJs(); o.destroy(); return a; });
+const vres = J(b.video_embed_finish("ci.wm.webm", 12345, []));
+if (vres.watermark_id !== wid || vres.extra.frames !== N) fail("video embed result");
+answer(J(b.video_self_check_begin(meta)), marked);
+const vchk = J(b.video_self_check_result());
+if (!vchk.extra.self_check.payload_recoverable) fail(`video read-back: ${vchk.extra.self_check.status}`);
+const vrep = answer(J(b.video_detect_begin(meta, () => {})), marked);
+if (vrep.status !== "payload-recovered" || vrep.payload.text !== "wasm video" || !vrep.authentic) fail(`video detection: ${vrep.status}`);
+if (vticks < 5) fail(`too few video progress callbacks (${vticks})`);
+console.log(`OK: video embed + read-back + detect (${N} frames ${W}x${H}) in ${(Date.now() - t1) / 1000}s`);

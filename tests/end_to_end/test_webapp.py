@@ -196,3 +196,97 @@ def test_bridge_refuses_rewatermark(bridge, synthetic_photo: np.ndarray) -> None
     rep = bridge.detect(res["output"], "b.png", False)
     texts = {rep["payload"]["text"]} | {a["payload"]["text"] for a in rep["additional_watermarks"]}
     assert texts == {"one", "two"}
+
+
+def _meta(info, name: str) -> dict:
+    """What worker.js reports about a video (from Mediabunny)."""
+    return {
+        "name": name,
+        "width": info.width,
+        "height": info.height,
+        "fps": float(info.fps),
+        "duration": info.duration,
+        "frames": info.frames,
+        "codec": info.codec,
+        "audio_codecs": info.audio_codecs,
+    }
+
+
+def _luma_frames(info, req=None):
+    """Luma planes in presentation order, selected like worker.js does."""
+    from veilmark.video import ffmpeg
+
+    ysize = info.width * info.height
+    taken = 0
+    for n, f in enumerate(ffmpeg.FrameReader(info, "yuv420p")):
+        if req is None or (req["max_frames"] > taken and n % req["stride"] < req["run_length"]):
+            taken += 1
+            yield f, f[:ysize].tobytes()
+
+
+def _run_requests(bridge, req, info) -> dict:
+    while True:
+        for _, y in _luma_frames(info, req):
+            bridge.video_frame(y)
+        r = bridge.video_frames_end()
+        if "report" in r:
+            return r["report"]
+        req = r["request"]
+
+
+@pytest.mark.video
+@pytest.mark.slow
+def test_video_bridge_protocol(bridge, tmp_path: Path) -> None:
+    """The frame-by-frame protocol worker.js drives, with ffmpeg standing in for WebCodecs:
+    existing-watermark check, embedding, read-back check, key-less public verification,
+    and the refusal to watermark twice."""
+    from conftest import make_test_video
+    from veilmark.video import ffmpeg
+
+    if not ffmpeg.available():
+        pytest.skip("ffmpeg not installed")
+    src = make_test_video(tmp_path / "src.mp4", seconds=3.0, size="640x360")
+    info = ffmpeg.probe(src)
+    st = bridge.generate_keys("Web Video")
+    progress: list[float] = []
+    req = bridge.video_embed_begin(
+        _meta(info, "src.mp4"),
+        "web video",
+        "balanced",
+        "robust",
+        True,
+        False,
+        True,
+        lambda f, m: progress.append(f),
+    )
+    assert _run_requests(bridge, req, info)["status"] == "not-detected"
+    wid = bridge.video_embed_start()["watermark_id"]
+    out = tmp_path / "src.wm.mp4"
+    writer = ffmpeg.FrameWriter(info, out, ffmpeg.EncodeSettings())
+    ysize = info.width * info.height
+    for frame, y in _luma_frames(info):
+        buf = bytearray(frame.tobytes())
+        buf[:ysize] = bridge.video_embed_frame(y)
+        writer.write(bytes(buf))
+    writer.finish()
+    res = bridge.video_embed_finish("src.wm.mp4", out.stat().st_size, ["note from js"])
+    assert res["watermark_id"] == wid and res["extra"]["frames"] == 90 and "note from js" in res["notes"]
+    oinfo = ffmpeg.probe(out)
+    _run_requests(bridge, bridge.video_self_check_begin(_meta(oinfo, "src.wm.mp4")), oinfo)
+    res = bridge.video_self_check_result()
+    assert res["extra"]["self_check"]["payload_recoverable"], res
+    assert progress == sorted(progress) and progress[-1] > 0.95
+
+    # Watermarking the output again is refused after the existing-watermark check.
+    req = bridge.video_embed_begin(_meta(oinfo, "again.mp4"), "two", "balanced")
+    _run_requests(bridge, req, oinfo)
+    with pytest.raises(ValueError, match="already carries"):
+        bridge.video_embed_start()
+
+    # A visitor without keys verifies the public watermark with the public key alone.
+    bridge.forget_keys()
+    bridge.add_trusted(st["public_line"], "")
+    rep = _run_requests(bridge, bridge.video_detect_begin(_meta(oinfo, "copy.mp4")), oinfo)
+    assert rep["status"] == "payload-recovered" and rep["payload"]["text"] == "web video"
+    assert rep["verification"]["signature"] == "valid" and rep["verification"]["trust"] == "trusted"
+    assert rep["diagnostics"]["publicly_verifiable"] is True

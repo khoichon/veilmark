@@ -47,7 +47,8 @@ button.wide { width: 100%; margin-top: 14px; }
 .drop { border: 2px dashed var(--line); border-radius: 12px; padding: 22px 12px; text-align: center; background: var(--drop); cursor: pointer; display: grid; gap: 4px; overflow-wrap: anywhere; transition: border-color .15s; }
 .drop small { color: var(--muted); }
 .drop.over { border-color: var(--accent); }
-.drop img { max-width: 100%; max-height: 180px; border-radius: 6px; margin: 0 auto; }
+.drop img, .drop video { display: block; max-width: 100%; max-height: 180px; border-radius: 6px; margin: 0 auto; }
+video.result { display: block; width: 100%; max-height: 70vh; border-radius: 8px; background: #000; margin: 10px 0; }
 .identity { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; margin-bottom: 12px; }
 .identity .label { font-weight: 600; }
 .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; overflow-wrap: anywhere; }
